@@ -1,0 +1,315 @@
+#!/usr/bin/env bash
+# karna — Start and manage Karna with auto-update support.
+#
+# Usage:
+#   ./karna start          Start all services + background updater
+#   ./karna stop           Stop everything (graceful drain)
+#   ./karna restart        Restart all services
+#   ./karna update         Check for updates and apply now
+#   ./karna logs [svc]     Tail logs (optionally for one service)
+#   ./karna status         Show service status
+#   ./karna setup          First-time setup (validate config, test connections)
+#
+# Environment:
+#   UPDATE_POLL_INTERVAL   Seconds between update checks (default: 300)
+#   KARNA_AUTO_UPDATE      Set to "0" to disable auto-update (default: "1")
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+POLL_INTERVAL="${UPDATE_POLL_INTERVAL:-300}"
+AUTO_UPDATE="${KARNA_AUTO_UPDATE:-1}"
+PID_FILE=".karna-updater.pid"
+LOG_FILE=".karna-updater.log"
+
+# ── Helpers ──────────────────────────────────────────────────
+
+log() { echo "[karna $(date +%H:%M:%S)] $*"; }
+log_file() { echo "[$(date +%Y-%m-%dT%H:%M:%S)] $*" >> "$LOG_FILE"; }
+
+is_updater_running() {
+    [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+}
+
+stop_updater() {
+    if is_updater_running; then
+        kill "$(cat "$PID_FILE")" 2>/dev/null || true
+        rm -f "$PID_FILE"
+        log "Updater stopped"
+    fi
+}
+
+# ── Update Logic ─────────────────────────────────────────────
+
+# Classify changed files and determine what to rebuild.
+# Sets: REBUILD_AGENT, REBUILD_FRONTEND, CONFIG_ONLY
+classify_changes() {
+    local changed="$1"
+    REBUILD_AGENT=false
+    REBUILD_FRONTEND=false
+    REBUILD_CODE_SERVER=false
+    CONFIG_ONLY=true
+
+    while IFS= read -r file; do
+        case "$file" in
+            agent/src/*|agent/Cargo*|agent/Dockerfile)
+                REBUILD_AGENT=true; CONFIG_ONLY=false ;;
+            frontend/src/*|frontend/app/*|frontend/package*|frontend/Dockerfile|frontend/next*)
+                REBUILD_FRONTEND=true; CONFIG_ONLY=false ;;
+            code-server/*)
+                REBUILD_CODE_SERVER=true; CONFIG_ONLY=false ;;
+            docker-compose.yml|migrations/*)
+                REBUILD_AGENT=true; REBUILD_FRONTEND=true; REBUILD_CODE_SERVER=true; CONFIG_ONLY=false ;;
+        esac
+    done <<< "$changed"
+}
+
+# Check for remote changes, pull, and selectively rebuild.
+check_and_update() {
+    # Fetch latest
+    if ! git fetch origin 2>/dev/null; then
+        log "Git fetch failed, skipping update check"
+        return 1
+    fi
+
+    local branch
+    branch="$(git rev-parse --abbrev-ref HEAD)"
+    local local_sha remote_sha
+    local_sha="$(git rev-parse HEAD)"
+    remote_sha="$(git rev-parse "origin/$branch" 2>/dev/null || echo "$local_sha")"
+
+    if [ "$local_sha" = "$remote_sha" ]; then
+        return 0
+    fi
+
+    local changed
+    changed="$(git diff --name-only "$local_sha" "$remote_sha")"
+    local num_files
+    num_files="$(echo "$changed" | wc -l | tr -d ' ')"
+
+    log "Update: ${local_sha:0:8} → ${remote_sha:0:8} ($num_files files)"
+    log_file "Update: $local_sha → $remote_sha"
+    log_file "$changed"
+
+    # Pull changes (fast-forward only to avoid conflicts)
+    if ! git pull --ff-only origin "$branch"; then
+        log "Pull failed (not fast-forward), skipping"
+        log_file "Pull failed: not fast-forward"
+        return 1
+    fi
+
+    classify_changes "$changed"
+
+    if [ "$CONFIG_ONLY" = true ]; then
+        log "Config/skills changes only — agent hot-reloads automatically"
+        log_file "Config-only update, no rebuild needed"
+        return 0
+    fi
+
+    if [ "$REBUILD_AGENT" = true ]; then
+        log "Rebuilding agent..."
+        log_file "Rebuilding agent"
+        docker compose build agent
+        # Graceful restart: docker sends SIGTERM, agent drains current task
+        docker compose up -d agent
+        log "Agent rebuilt and restarted"
+    fi
+
+    if [ "$REBUILD_FRONTEND" = true ]; then
+        log "Rebuilding frontend..."
+        log_file "Rebuilding frontend"
+        docker compose build frontend
+        docker compose up -d frontend
+        log "Frontend rebuilt and restarted"
+    fi
+
+    if [ "$REBUILD_CODE_SERVER" = true ]; then
+        log "Rebuilding code-server..."
+        log_file "Rebuilding code-server"
+        docker compose build code-server
+        docker compose up -d code-server
+        log "Code-server rebuilt and restarted"
+    fi
+
+    log_file "Update complete"
+    return 0
+}
+
+# Background loop that checks for updates periodically.
+update_loop() {
+    log "Auto-updater started (interval: ${POLL_INTERVAL}s)"
+    log_file "Updater started, interval=${POLL_INTERVAL}s"
+
+    while true; do
+        sleep "$POLL_INTERVAL"
+        check_and_update || true
+    done
+}
+
+# ── Agent Exit Code Watcher ─────────────────────────────────
+
+# Watch the agent container. If it exits with code 42 (update needed),
+# pull + rebuild + restart. For any other exit, let Docker's restart policy handle it.
+watch_agent() {
+    while true; do
+        # Wait for agent container to exit
+        local exit_code
+        exit_code="$(docker compose wait agent 2>/dev/null || echo "0")"
+
+        if [ "$exit_code" = "42" ]; then
+            log "Agent requested rebuild (exit 42)"
+            log_file "Agent exit 42 — rebuild requested"
+            check_and_update || true
+        fi
+
+        # Brief pause before re-watching (Docker restart policy brings agent back)
+        sleep 5
+    done
+}
+
+# ── Commands ─────────────────────────────────────────────────
+
+cmd_start() {
+    log "Starting Karna..."
+    docker compose up -d
+
+    if [ "$AUTO_UPDATE" = "1" ]; then
+        stop_updater  # Clean up stale PID if any
+        update_loop &
+        echo $! > "$PID_FILE"
+        disown
+
+        # Also watch for agent exit-code-42 in background
+        watch_agent &
+        disown
+
+        log "Started with auto-update enabled"
+    else
+        log "Started (auto-update disabled)"
+    fi
+}
+
+cmd_stop() {
+    log "Stopping Karna..."
+    stop_updater
+    docker compose down
+    log "Stopped"
+}
+
+cmd_restart() {
+    log "Restarting..."
+    stop_updater
+    docker compose down
+    cmd_start
+}
+
+cmd_update() {
+    log "Checking for updates..."
+    if check_and_update; then
+        log "Update check complete"
+    else
+        log "Update check failed"
+        exit 1
+    fi
+}
+
+cmd_status() {
+    docker compose ps
+    echo ""
+    if is_updater_running; then
+        echo "Auto-updater: running (PID $(cat "$PID_FILE"), interval ${POLL_INTERVAL}s)"
+    else
+        echo "Auto-updater: not running"
+    fi
+}
+
+cmd_logs() {
+    docker compose logs "$@"
+}
+
+cmd_setup() {
+    log "Running first-time setup..."
+    local errors=0
+
+    # Check required files
+    if [ ! -f ".env" ]; then
+        log "ERROR: .env not found. Copy .env.example to .env and fill in secrets."
+        errors=$((errors + 1))
+    fi
+    if [ ! -f "config.yaml" ]; then
+        log "ERROR: config.yaml not found. Run: cp config.example.yaml config.yaml"
+        errors=$((errors + 1))
+    fi
+
+    # Test GitHub token
+    if [ -f ".env" ]; then
+        # shellcheck disable=SC1091
+        source .env 2>/dev/null || true
+        if [ -n "${GITHUB_TOKEN:-}" ]; then
+            if gh auth status 2>/dev/null || curl -sf -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/user >/dev/null 2>&1; then
+                log "GitHub token: valid"
+            else
+                log "WARNING: GitHub token may be invalid"
+            fi
+        else
+            log "ERROR: GITHUB_TOKEN not set in .env"
+            errors=$((errors + 1))
+        fi
+    fi
+
+    # Check Docker
+    if ! docker compose version >/dev/null 2>&1; then
+        log "ERROR: docker compose not available"
+        errors=$((errors + 1))
+    else
+        log "Docker Compose: $(docker compose version --short)"
+    fi
+
+    # Check git
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        log "WARNING: Not a git repo — auto-update won't work"
+    else
+        log "Git: $(git --version)"
+        local branch
+        branch="$(git rev-parse --abbrev-ref HEAD)"
+        log "Branch: $branch"
+    fi
+
+    if [ "$errors" -gt 0 ]; then
+        log "Setup found $errors error(s). Fix them and run ./karna setup again."
+        exit 1
+    fi
+
+    log "Setup looks good. Run './karna start' to begin."
+}
+
+# ── Main ─────────────────────────────────────────────────────
+
+case "${1:-}" in
+    start)   cmd_start ;;
+    stop)    cmd_stop ;;
+    restart) cmd_restart ;;
+    update)  cmd_update ;;
+    status)  cmd_status ;;
+    logs)    shift; cmd_logs "$@" ;;
+    setup)   cmd_setup ;;
+    "")
+        echo "Usage: ./karna {start|stop|restart|update|status|logs|setup}"
+        echo ""
+        echo "Commands:"
+        echo "  start     Start all services with auto-update"
+        echo "  stop      Gracefully stop everything"
+        echo "  restart   Stop and restart all services"
+        echo "  update    Check for updates and apply now"
+        echo "  status    Show service status"
+        echo "  logs      Tail service logs (e.g. ./karna logs agent)"
+        echo "  setup     Validate configuration"
+        ;;
+    *)
+        echo "Unknown command: $1"
+        echo "Run './karna' for usage."
+        exit 1
+        ;;
+esac

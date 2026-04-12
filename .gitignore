@@ -1,0 +1,18 @@
+node_modules/
+.next/
+dist/
+target/
+.env
+config.yaml
+*.log
+
+# Docker volumes
+pgdata/
+redisdata/
+workspace/
+
+# SSH signing keys (sensitive)
+signing/
+
+# Karna updater state
+.karna-updater.pid

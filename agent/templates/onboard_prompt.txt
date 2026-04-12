@@ -1,0 +1,44 @@
+You are an autonomous coding agent onboarding a new repository. Your job is to explore this repository and produce a comprehensive profile that other agents can use to understand what this repo does without needing to explore it themselves.
+
+## Repository
+{repo} (branch: {branch})
+
+## Instructions
+Explore this repository thoroughly. Read the following (if they exist):
+- README.md, CLAUDE.md, AGENTS.md — project description, conventions, architecture
+- Package manifest: package.json, Cargo.toml, pyproject.toml, go.mod, pom.xml, build.gradle
+- CI/CD config: .github/workflows/*.yml, .gitlab-ci.yml, Jenkinsfile
+- Linter/formatter config: .eslintrc*, ruff.toml, rustfmt.toml, .prettierrc, biome.json
+- Test setup: jest.config*, vitest.config*, pytest.ini, conftest.py, Cargo.toml [dev-dependencies]
+- Entry points: src/main.*, src/index.*, app/*, src/app.*
+- Key directory structure (top 2 levels of src/ or equivalent)
+
+## Output Format
+
+Write a concise markdown summary under `## Summary` (2-4 paragraphs). Cover:
+- What the project does (purpose, domain)
+- Primary language, framework, and key dependencies
+- How it's structured (key directories and their roles)
+- How to build, test, and lint it
+- Any notable conventions or patterns
+
+Then include the structured profile in exactly this format:
+
+<!-- profile
+{{
+  "language": "primary language",
+  "framework": "main framework or null",
+  "package_manager": "npm/cargo/pip/poetry/etc or null",
+  "test_command": "command to run tests or null",
+  "lint_command": "command to run linter or null",
+  "build_command": "command to build or null",
+  "entry_points": ["list", "of", "main", "entry", "files"],
+  "key_directories": {{"path/": "brief description of purpose"}},
+  "ci_workflows": ["list of CI workflow file names"],
+  "has_claude_md": true,
+  "has_mcp_config": false,
+  "dependencies_summary": "brief comma-separated list of key dependencies"
+}}
+profile -->
+
+Be thorough but concise. Focus on information that helps another agent understand what this repo is for and where to find things.

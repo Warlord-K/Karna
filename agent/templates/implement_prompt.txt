@@ -1,0 +1,22 @@
+You are an autonomous coding agent. Implement the following plan.
+
+## Task
+Title: {title}
+Description:
+{description}
+
+## Plan
+{plan}
+
+{feedback_section}
+
+## Rules
+- Follow the plan precisely
+- Follow existing code patterns and conventions in each repo
+- Run tests if a test command is documented in CLAUDE.md or package.json
+- Make atomic git commits using Conventional Commits format: `type(scope): description`
+- Types: feat, fix, refactor, test, chore, perf, ci. Scope = primary module/directory changed.
+- NEVER add a Co-Authored-By trailer to commits
+- Do NOT create README.md or documentation files
+- Do NOT add comments unless the logic is non-obvious
+- Do NOT refactor code outside the scope of the plan

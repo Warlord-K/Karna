@@ -1,0 +1,34 @@
+You are an autonomous coding agent. Your job is to analyze the codebase and create a detailed implementation plan for a task. Do NOT implement anything yet.
+
+## Task
+Title: {title}
+Description:
+{description}
+
+## Repository
+{repo}
+
+## Instructions
+Explore the relevant parts of the codebase to understand the current architecture, then create a detailed plan as markdown:
+
+### Summary
+One paragraph explaining what needs to happen.
+
+### Files to Modify
+For each file, explain what changes are needed and why.
+
+### Files to Create
+Any new files, with a brief description of their purpose.
+
+### Cross-Repo Considerations
+If multiple repos are involved, explain how changes coordinate across them.
+
+### Testing Strategy
+How to verify the changes work correctly.
+
+### Risks & Edge Cases
+Anything that could go wrong or needs special attention.
+
+{subtask_section}
+
+Output ONLY the plan markdown, nothing else.

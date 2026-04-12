@@ -1,0 +1,247 @@
+# Karna Configuration
+# Copy this file to config.yaml and customize:
+#   cp config.example.yaml config.yaml
+
+repos:
+  # Add your repositories here:
+  - repo: you/my-app
+    branch: main
+
+  # Enable self-iteration — the agent can modify its own config, skills, and code.
+  # Code changes trigger a rebuild; config/skill changes hot-reload automatically.
+  #
+  # - repo: you/karna-fork
+  #   branch: main
+  #   self: true
+
+agent:
+  max_turns: 100                   # Max CLI turns per invocation (Claude only, ignored by Codex)
+  poll_interval_secs: 30           # How often to check for new tasks
+  max_concurrent_tasks: 1          # Per worker instance (increase with --scale)
+
+  # Path to a markdown file with agent instructions. Injected as system prompt
+  # into every CLI invocation (planning, implementation, feedback). Use this to
+  # give the agent persistent identity, a map of your repos, and cross-repo
+  # conventions. Relative paths resolve from this config file's directory.
+  #
+  # instructions: instructions.md
+
+  # Available CLI backends — shown as options in the UI when creating tasks.
+  # First backend is the default. Models listed per backend populate the model dropdown.
+  backends:
+    claude:
+      models: [opus, sonnet, haiku]
+      default_model: sonnet
+    codex:
+      models: [gpt-5.4, gpt-5.4-mini, gpt-5.3-codex]
+      default_model: gpt-5.4
+
+# ──────────────────────────────────────────────────────────
+# Commit Signing (optional, auto-detected)
+# ──────────────────────────────────────────────────────────
+# Drop an SSH private key into the ./signing/ directory and
+# commits are automatically signed. No config needed.
+#
+#   cp ~/.ssh/id_ed25519 signing/signing_key
+#
+# To override the auto-detected path:
+# signing:
+#   ssh_key_path: /home/agent/.ssh/signing/signing_key
+#   allowed_signers_path: /home/agent/.ssh/signing/allowed_signers
+
+# ──────────────────────────────────────────────────────────
+# Notifications (optional)
+# ──────────────────────────────────────────────────────────
+# Requires RESEND_API_KEY in .env
+#
+# notifications:
+#   email: you@example.com
+#   from_email: agent@yourdomain.com
+
+# ──────────────────────────────────────────────────────────
+# Code Server (Browser IDE)
+# ──────────────────────────────────────────────────────────
+# Customize the browser IDE at localhost:8443. All fields are
+# optional — sensible defaults are used if this section is omitted.
+# Settings are regenerated on each container start from this config.
+
+code_server:
+  theme: "Default Dark Modern"
+  extensions:
+    - GitHub.github-vscode-theme
+    - ms-python.python
+    - rust-lang.rust-analyzer
+    - dbaeumer.vscode-eslint
+    - esbenp.prettier-vscode
+    - bradlc.vscode-tailwindcss
+  # settings:                              # Any VS Code setting (overrides defaults)
+  #   editor.fontSize: 14
+  #   editor.tabSize: 2
+  #   editor.formatOnSave: true
+
+# ──────────────────────────────────────────────────────────
+# MCP Servers
+# ──────────────────────────────────────────────────────────
+# These extend Claude Code with external tool servers.
+# Servers that need no API keys are enabled by default.
+# Comment out any you don't want.
+#
+# Repos can also provide their own .mcp.json — those get
+# auto-discovered and merged at runtime.
+
+mcp_servers:
+  # ── Free, no API key needed ──
+
+  # Fetch any URL as clean markdown (docs, APIs, web pages)
+  - name: fetch
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-fetch"]
+
+  # Up-to-date library documentation (prevents hallucinated APIs)
+  - name: context7
+    command: npx
+    args: ["-y", "@upstash/context7-mcp"]
+
+  # Persistent knowledge graph across tasks
+  - name: memory
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-memory"]
+
+  # Structured multi-step reasoning
+  - name: sequential-thinking
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+
+  # ── Needs GITHUB_TOKEN (already required by Karna) ──
+
+  - name: github
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_TOKEN}"
+
+  # ── Optional: uncomment and add API keys in .env ──
+
+  # Sentry error tracking — get error context for bug fix tasks
+  # - name: sentry
+  #   command: npx
+  #   args: ["-y", "@sentry/mcp-server"]
+  #   env:
+  #     SENTRY_AUTH_TOKEN: "${SENTRY_AUTH_TOKEN}"
+
+  # Linear — pull task details, acceptance criteria, context
+  # - name: linear
+  #   command: npx
+  #   args: ["-y", "@linear/mcp-server"]
+  #   env:
+  #     LINEAR_API_KEY: "${LINEAR_API_KEY}"
+
+  # Slack — post status updates, ask questions
+  # - name: slack
+  #   command: npx
+  #   args: ["-y", "@anthropic/mcp-server-slack"]
+  #   env:
+  #     SLACK_BOT_TOKEN: "${SLACK_BOT_TOKEN}"
+  #     SLACK_TEAM_ID: "${SLACK_TEAM_ID}"
+
+  # Postgres — inspect schema, run read-only queries
+  # - name: postgres
+  #   command: npx
+  #   args: ["-y", "@modelcontextprotocol/server-postgres", "${DATABASE_URL}"]
+
+  # Supabase — manage projects, tables, functions
+  # - name: supabase
+  #   command: npx
+  #   args: ["-y", "@supabase/mcp-server", "--supabase-access-token", "${SUPABASE_ACCESS_TOKEN}"]
+
+  # Notion — read project docs and wikis
+  # - name: notion
+  #   command: npx
+  #   args: ["-y", "@notionhq/mcp-server"]
+  #   env:
+  #     NOTION_API_KEY: "${NOTION_API_KEY}"
+
+  # Brave Search — web search (free: 2000 queries/mo)
+  # - name: brave-search
+  #   command: npx
+  #   args: ["-y", "@modelcontextprotocol/server-brave-search"]
+  #   env:
+  #     BRAVE_API_KEY: "${BRAVE_API_KEY}"
+
+  # Playwright — browser automation for E2E testing
+  # - name: playwright
+  #   command: npx
+  #   args: ["-y", "@anthropic/mcp-server-playwright"]
+
+# ──────────────────────────────────────────────────────────
+# Schedules
+# ──────────────────────────────────────────────────────────
+# Automated agent runs on a cron schedule. The agent explores
+# your repos and optionally creates tasks on the kanban board.
+#
+# Schedules are synced to the database on startup. You can
+# toggle/modify them from the UI after that. Config acts as
+# the initial template — the DB is authoritative once synced.
+
+schedules:
+  - name: Bug Hunter
+    prompt: |
+      Scan the codebase for bugs, security vulnerabilities, race conditions,
+      error handling gaps, and potential crashes. Focus on:
+      - Logic errors and off-by-one mistakes
+      - Unhandled error paths and missing null checks
+      - Security issues (injection, auth bypass, data exposure)
+      - Resource leaks (unclosed connections, missing cleanup)
+      - Concurrency issues (race conditions, deadlocks)
+      Be specific and actionable. Only flag genuine bugs with high confidence.
+    cron_expression: "0 */6 * * *"
+    task_prefix: BUG
+    max_open_tasks: 3
+    priority: high
+    skills: [security, lint, typecheck]
+    enabled: false
+
+  - name: Feature Scout
+    prompt: |
+      Review the codebase for improvement opportunities. Look for:
+      - TODO/FIXME/HACK comments that describe real improvements
+      - Dead code that should be cleaned up
+      - Performance bottlenecks (N+1 queries, unnecessary re-renders)
+      - Missing tests for critical paths
+      Prioritize improvements with the most impact. Skip cosmetic changes.
+    cron_expression: "0 9 * * 1"
+    task_prefix: FEA
+    max_open_tasks: 5
+    priority: medium
+    skills: [test, lint, typecheck]
+    enabled: false
+
+# ──────────────────────────────────────────────────────────
+# Skills
+# ──────────────────────────────────────────────────────────
+# 9 built-in skills ship in the skills/ directory:
+#   test, lint, typecheck, commit, review, build, migrate, security, add-repo
+#
+# They are auto-loaded — no need to list them here.
+# Repos can also provide their own skills/ directory.
+#
+# To add custom skills inline:
+# skills:
+#   - name: deploy-staging
+#     description: "Deploy to staging environment"
+#     command: "gh workflow run deploy.yml -f environment=staging"
+#     phase: implement
+#
+#   - name: custom-check
+#     description: "Run our custom validation script"
+#     command: "./scripts/validate.sh"
+#     prompt: |
+#       Run this after every change to the API layer.
+#       It checks backward compatibility of all endpoints.
+#     phase: implement
+#
+# To disable a built-in skill, override it with an empty one:
+# skills:
+#   - name: security
+#     description: "Disabled"
+#     phase: none

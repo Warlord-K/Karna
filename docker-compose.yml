@@ -1,0 +1,152 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: karna
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-karna}
+      POSTGRES_DB: karna
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: pg_isready -U karna
+      interval: 5s
+      retries: 5
+
+  migrate:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: karna
+      POSTGRES_DB: karna
+      PGPASSWORD: ${POSTGRES_PASSWORD:-karna}
+    volumes:
+      - ./migrations:/migrations:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+    entrypoint: ["/migrations/run.sh"]
+    restart: "no"
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redisdata:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: redis-cli ping
+      interval: 5s
+      retries: 5
+
+  agent:
+    build: ./agent
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://karna:${POSTGRES_PASSWORD:-karna}@postgres:5432/karna
+      REDIS_URL: redis://redis:6379
+      REPOS_DIR: /workspace
+      WORKSPACES_DIR: /workspace/.workspaces
+      CONFIG_PATH: /etc/karna/config.yaml
+      GIT_AUTHOR_NAME: ${GIT_AUTHOR_NAME:-Karna Agent}
+      GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-agent@karna.dev}
+      TUNNEL_AGENT_HOSTNAME: ${TUNNEL_AGENT_HOSTNAME:-}
+    volumes:
+      - workspace:/workspace
+      - ./config.yaml:/etc/karna/config.yaml:ro
+      - ./skills:/etc/karna/skills:ro
+      - ~/.codex:/home/agent/.codex
+      - agent-keyring:/home/agent/.local/share/keyrings
+      - ./signing:/home/agent/.ssh/signing:ro    # Drop SSH key here → auto-signed commits
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    ports:
+      - "${AGENT_API_PORT:-8080}:8080"
+    restart: unless-stopped
+    stop_grace_period: 10m   # Max wait for active tasks; idle shutdown is near-instant
+    # Scale: docker compose up --scale agent=3
+
+  frontend:
+    build: ./frontend
+    environment:
+      DATABASE_URL: postgres://karna:${POSTGRES_PASSWORD:-karna}@postgres:5432/karna
+      AUTH_SECRET: ${AUTH_SECRET}
+      AUTH_DISABLED: ${AUTH_DISABLED:-}
+      SIGNUP_DISABLED: ${SIGNUP_DISABLED:-}
+      AUTH_TRUST_HOST: "true"
+      AUTH_URL: ${TUNNEL_FRONTEND_HOSTNAME:+https://${TUNNEL_FRONTEND_HOSTNAME}}
+      CONFIG_PATH: /etc/karna/config.yaml
+    volumes:
+      - ./config.yaml:/etc/karna/config.yaml:ro
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  code-server:
+    build: ./code-server
+    env_file: .env
+    environment:
+      PASSWORD: ${CODE_SERVER_PASSWORD:-changeme}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GH_TOKEN: ${GITHUB_TOKEN:-}
+    volumes:
+      - workspace:/workspace
+      - ./config.yaml:/etc/karna/config.yaml:ro
+      - code-server-extensions:/home/coder/.local/share/code-server/extensions
+    ports:
+      - "${CODE_SERVER_PORT:-8443}:8080"
+    command: --auth password --bind-addr 0.0.0.0:8080 /workspace
+    healthcheck:
+      test: curl -fsS http://localhost:8080/healthz > /dev/null || exit 1
+      interval: 5s
+      start_period: 180s
+      retries: 5
+
+  # Cloudflare Tunnel — auto-starts if CF credentials are configured in .env
+  # Exits cleanly and stays stopped if no credentials are set.
+  #
+  # Two modes:
+  #   1. Token-based: set CLOUDFLARE_TUNNEL_TOKEN (routes managed in CF dashboard)
+  #   2. Credentials-based: set CLOUDFLARE_TUNNEL_ID + CLOUDFLARE_TUNNEL_CREDENTIALS
+  #      + TUNNEL_FRONTEND_HOSTNAME / TUNNEL_CODE_SERVER_HOSTNAME (routes defined in code)
+  tunnel:
+    build: ./tunnel
+    environment:
+      CLOUDFLARE_TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+      CLOUDFLARE_TUNNEL_ID: ${CLOUDFLARE_TUNNEL_ID:-}
+      CLOUDFLARE_TUNNEL_CREDENTIALS: ${CLOUDFLARE_TUNNEL_CREDENTIALS:-}
+      TUNNEL_FRONTEND_HOSTNAME: ${TUNNEL_FRONTEND_HOSTNAME:-}
+      TUNNEL_CODE_SERVER_HOSTNAME: ${TUNNEL_CODE_SERVER_HOSTNAME:-}
+      TUNNEL_AGENT_HOSTNAME: ${TUNNEL_AGENT_HOSTNAME:-}
+    depends_on:
+      frontend:
+        condition: service_healthy
+      code-server:
+        condition: service_healthy
+      agent:
+        condition: service_started
+    restart: on-failure
+
+  autoheal:
+    image: willfarrell/autoheal
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: all
+      AUTOHEAL_INTERVAL: 30
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  workspace:
+  agent-keyring:
+  code-server-extensions:    # Persist installed extensions across restarts

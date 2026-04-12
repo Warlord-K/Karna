@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 30 8% 4%;
+    --foreground: 40 6% 92%;
+    --card: 30 6% 7%;
+    --card-foreground: 40 6% 92%;
+    --popover: 28 6% 9%;
+    --popover-foreground: 40 6% 92%;
+    --primary: 40 6% 92%;
+    --primary-foreground: 30 8% 4%;
+    --secondary: 28 5% 11%;
+    --secondary-foreground: 40 6% 92%;
+    --muted: 28 5% 11%;
+    --muted-foreground: 30 5% 50%;
+    --accent: 40 90% 56%;
+    --accent-foreground: 30 30% 8%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 30 5% 13%;
+    --input: 30 5% 13%;
+    --ring: 40 90% 56%;
+    --radius: 0.625rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background: hsl(40 90% 56% / 0.25);
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(30 5% 20%);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(30 5% 28%);
+  }
+
+  select option {
+    background: hsl(30 6% 9%);
+    color: hsl(40 6% 80%);
+  }
+}
+
+@layer utilities {
+  .snap-x {
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+  }
+  .snap-start {
+    scroll-snap-align: start;
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+}
+
+@media (max-width: 639px) {
+  .mobile-hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .mobile-hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
