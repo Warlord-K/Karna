@@ -15,7 +15,7 @@ export async function GET(
 
   // Verify schedule belongs to user
   const { rows: scheduleRows } = await pool.query(
-    "SELECT id FROM schedules WHERE id = $1 AND user_id = $2",
+    "SELECT id FROM schedules WHERE id = $1 AND (user_id = $2 OR user_id = '00000000-0000-0000-0000-000000000000')",
     [id, userId]
   );
   if (scheduleRows.length === 0) {

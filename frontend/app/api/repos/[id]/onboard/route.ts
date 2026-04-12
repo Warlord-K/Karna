@@ -12,7 +12,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
 
   const { rowCount } = await pool.query(
     `UPDATE repo_profiles SET status = 'pending', error_message = NULL
-     WHERE id = $1 AND user_id = $2`,
+     WHERE id = $1 AND (user_id = $2 OR user_id = '00000000-0000-0000-0000-000000000000')`,
     [id, userId]
   );
 
