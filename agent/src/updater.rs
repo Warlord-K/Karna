@@ -183,6 +183,29 @@ fn classify_file(path: &str) -> FileCategory {
 /// restart policy brings the container back before the host-side wrapper
 /// can rebuild the image.
 pub async fn pull_self_repo(repo_path: &Path, branch: &str) -> Result<()> {
+    // Remove AGENTS.md symlink if it's untracked — it's auto-created by
+    // ensure_agents_md_symlink() but may now be tracked in the remote,
+    // which causes git pull to fail with "untracked working tree files
+    // would be overwritten by merge".
+    let agents_md = repo_path.join("AGENTS.md");
+    if agents_md.is_symlink() {
+        let is_tracked = Command::new("git")
+            .current_dir(repo_path)
+            .args(["ls-files", "--error-unmatch", "AGENTS.md"])
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !is_tracked {
+            if let Err(e) = tokio::fs::remove_file(&agents_md).await {
+                debug!(error = %e, "Failed to remove untracked AGENTS.md symlink");
+            } else {
+                info!("Removed untracked AGENTS.md symlink before pull");
+            }
+        }
+    }
+
     let output = Command::new("git")
         .current_dir(repo_path)
         .args(["pull", "--ff-only", "origin", branch])
