@@ -197,7 +197,7 @@ impl Database {
 
     // --- Subtask queries ---
 
-    /// Create a subtask under a parent task.
+    #[allow(dead_code)]
     pub async fn create_subtask(
         &self,
         parent_id: Uuid,
@@ -237,7 +237,7 @@ impl Database {
         Ok(tasks)
     }
 
-    /// Check if all subtasks of a parent are done and update parent status accordingly.
+    #[allow(dead_code)]
     pub async fn check_parent_completion(&self, parent_id: Uuid) -> Result<bool> {
         let row = sqlx::query_as::<_, (i64, i64)>(
             r#"SELECT COUNT(*),
@@ -280,6 +280,7 @@ impl Database {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn get_logs(&self, task_id: Uuid) -> Result<Vec<AgentLog>> {
         let logs = sqlx::query_as::<_, AgentLog>(
             "SELECT * FROM agent_logs WHERE task_id = $1 ORDER BY created_at ASC",
@@ -377,7 +378,7 @@ impl Database {
         Ok(count)
     }
 
-    /// Create a task from a schedule run.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_task_from_schedule(
         &self,
         user_id: Uuid,
@@ -517,6 +518,7 @@ impl Database {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn get_schedule_runs(&self, schedule_id: Uuid, limit: i64) -> Result<Vec<ScheduledRun>> {
         let runs = sqlx::query_as::<_, ScheduledRun>(
             "SELECT * FROM scheduled_runs WHERE schedule_id = $1 ORDER BY started_at DESC LIMIT $2",
@@ -528,6 +530,7 @@ impl Database {
         Ok(runs)
     }
 
+    #[allow(dead_code)]
     pub async fn get_run_logs(&self, run_id: Uuid) -> Result<Vec<ScheduledRunLog>> {
         let logs = sqlx::query_as::<_, ScheduledRunLog>(
             "SELECT * FROM scheduled_run_logs WHERE run_id = $1 ORDER BY created_at ASC",
@@ -571,7 +574,7 @@ impl Database {
         Ok(count > 0)
     }
 
-    /// Insert a schedule from config.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_config_schedule(
         &self,
         user_id: Uuid,

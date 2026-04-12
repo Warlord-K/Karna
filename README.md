@@ -1,6 +1,10 @@
-# Karna
+<p align="center">
+  <img src="frontend/public//logo-192.png" alt="Karna" width="120" />
+</p>
 
-Self-hosted autonomous coding agent. Create tasks on a kanban board, an AI agent plans and implements them, opens PRs on GitHub, and notifies you via email.
+<h1 align="center">Karna</h1>
+
+<p align="center">Self-hosted autonomous coding agent. Create tasks on a kanban board, an AI agent plans and implements them, opens PRs on GitHub, and notifies you via email.</p>
 
 ```
 You create a task → Agent writes a plan → You review → Agent implements → Opens PR → You merge

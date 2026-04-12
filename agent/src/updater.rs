@@ -3,8 +3,8 @@ use std::path::Path;
 use tokio::process::Command;
 use tracing::{debug, info};
 
-/// What kind of change was detected in the self-repo.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SelfRepoChange {
     pub agent_code: bool,
     pub frontend_code: bool,
@@ -21,7 +21,7 @@ impl SelfRepoChange {
         self.agent_code || self.frontend_code || self.infrastructure
     }
 
-    /// Which docker compose services need rebuilding.
+    #[allow(dead_code)]
     pub fn services_to_rebuild(&self) -> Vec<&'static str> {
         let mut services = Vec::new();
         if self.agent_code || self.infrastructure {
@@ -120,8 +120,7 @@ pub async fn check_self_repo(repo_path: &Path, branch: &str) -> Result<Option<Se
     }))
 }
 
-/// Signal to the host-side updater that a rebuild is needed.
-/// Writes change details to a well-known Redis key that the wrapper script can poll.
+#[allow(dead_code)]
 pub async fn signal_rebuild(
     redis: &redis::Client,
     change: &SelfRepoChange,

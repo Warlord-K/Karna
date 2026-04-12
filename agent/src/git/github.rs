@@ -121,7 +121,7 @@ pub async fn get_pr_comments(
     Ok(comments)
 }
 
-/// Check if CI checks are passing on a PR.
+#[allow(dead_code)]
 pub async fn check_pr_status(
     worktree_path: &Path,
     repo: &str,

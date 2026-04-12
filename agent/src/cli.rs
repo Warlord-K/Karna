@@ -16,6 +16,7 @@ pub enum StreamEvent {
 pub type EventSender = mpsc::UnboundedSender<StreamEvent>;
 
 /// Unified result from any CLI backend (Claude Code, Codex, etc.).
+#[allow(dead_code)]
 pub struct CliResult {
     pub output: String,
     pub session_id: Option<String>,
@@ -100,6 +101,6 @@ fn shorten_path(path: &str) -> String {
 pub async fn run(backend: &str, opts: CliOptions<'_>) -> Result<CliResult> {
     match backend {
         "codex" => crate::codex::run(opts).await,
-        "claude" | _ => crate::claude::run(opts).await,
+        _ => crate::claude::run(opts).await,
     }
 }

@@ -47,6 +47,7 @@ impl TaskStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 pub enum TaskPriority {
     Low,
     Medium,
@@ -54,6 +55,7 @@ pub enum TaskPriority {
     Urgent,
 }
 
+#[allow(dead_code)]
 impl TaskPriority {
     pub fn sort_order(&self) -> i32 {
         match self {
@@ -66,6 +68,7 @@ impl TaskPriority {
 }
 
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct AgentTask {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -127,19 +130,20 @@ impl AgentTask {
         }
     }
 
-    /// Whether this task is a parent (has subtasks).
+    #[allow(dead_code)]
     pub fn is_parent(&self) -> bool {
         // A parent task has no repo set — subtasks carry the repo
         self.repo.is_none() && self.parent_task_id.is_none()
     }
 
-    /// Whether this task is a subtask.
+    #[allow(dead_code)]
     pub fn is_subtask(&self) -> bool {
         self.parent_task_id.is_some()
     }
 }
 
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct AgentLog {
     pub id: Uuid,
     pub task_id: Uuid,
@@ -153,6 +157,7 @@ pub struct AgentLog {
 // --- Schedule models ---
 
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct Schedule {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -188,6 +193,7 @@ impl Schedule {
 }
 
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct ScheduledRun {
     pub id: Uuid,
     pub schedule_id: Uuid,
@@ -201,6 +207,7 @@ pub struct ScheduledRun {
 }
 
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct ScheduledRunLog {
     pub id: Uuid,
     pub run_id: Uuid,

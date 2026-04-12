@@ -69,6 +69,7 @@ services:
   frontend:
     build: ./frontend
     environment:
+      HOSTNAME: "0.0.0.0"
       DATABASE_URL: postgres://karna:${POSTGRES_PASSWORD:-karna}@postgres:5432/karna
       AUTH_SECRET: ${AUTH_SECRET}
       AUTH_DISABLED: ${AUTH_DISABLED:-}
@@ -83,7 +84,7 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/',r=>{r.resume();process.exit(0)}).on('error',()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3

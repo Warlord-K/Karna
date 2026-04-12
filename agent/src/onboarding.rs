@@ -138,7 +138,7 @@ pub async fn check_pending_onboards(config: &Config, db: &Database) -> Result<()
     Ok(())
 }
 
-/// Check all ready profiles for staleness (HEAD changed since last onboard).
+#[allow(dead_code)]
 pub async fn check_stale_profiles(config: &Config, db: &Database) -> Result<()> {
     let profiles = db.get_ready_repo_profiles().await?;
 

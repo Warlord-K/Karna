@@ -159,10 +159,7 @@ export default function HomePage({ authDisabled }: { authDisabled: boolean }) {
         <div className="flex items-center justify-between h-14 px-3 sm:px-6">
           <div className="flex items-center gap-2 sm:gap-4">
             <div className="flex items-center gap-2 sm:gap-2.5">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-sun-9">
-                <circle cx="12" cy="12" r="5" stroke="currentColor" strokeWidth="1.5"/>
-                <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
+              <img src="/logo-192.png" alt="Karna" width={20} height={20} />
               <span className="text-[15px] font-semibold text-gray-12 tracking-[-0.01em]">Karna</span>
             </div>
             {/* Section toggle */}

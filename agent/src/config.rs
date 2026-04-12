@@ -15,6 +15,7 @@ pub struct BackendConfig {
 pub type Backends = indexmap::IndexMap<String, BackendConfig>;
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct Config {
     pub database_url: String,
     pub redis_url: String,

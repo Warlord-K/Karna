@@ -154,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
                 .ok()
                 .and_then(|m| m.modified().ok())
             {
-                if last_config_mtime.map_or(true, |last| current_mtime > last) {
+                if last_config_mtime.is_none_or(|last| current_mtime > last) {
                     match config::Config::from_env() {
                         Ok(new_config) => {
                             info!("Config reloaded (file changed on disk)");

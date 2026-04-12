@@ -59,10 +59,7 @@ export default function LoginForm({ signupDisabled = false }: { signupDisabled?:
       <div className="w-full max-w-[340px] mx-4">
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-sun-3 mb-4 shadow-card">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-sun-9">
-              <circle cx="12" cy="12" r="5" stroke="currentColor" strokeWidth="1.5"/>
-              <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-            </svg>
+            <img src="/logo-192.png" alt="Karna" width={24} height={24} />
           </div>
           <h1 className="text-[15px] font-semibold text-gray-12 tracking-[-0.01em]">Sign in to Karna</h1>
           <p className="text-[13px] text-gray-9 mt-1">Autonomous coding agent</p>

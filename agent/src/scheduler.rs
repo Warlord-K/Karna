@@ -76,7 +76,7 @@ pub async fn check_schedules(
         let last_run = db.get_last_run(schedule.id).await?;
 
         // Skip if a run is already in progress
-        if last_run.as_ref().map_or(false, |r| r.status == "running") {
+        if last_run.as_ref().is_some_and(|r| r.status == "running") {
             continue;
         }
 
@@ -140,7 +140,7 @@ fn is_schedule_due(schedule: &Schedule, last_run: Option<&ScheduledRun>) -> bool
     // One-shot: due if run_at is in the past and no completed run exists
     if let Some(run_at) = schedule.run_at {
         return run_at <= Utc::now()
-            && last_run.map_or(true, |r| r.status != "completed");
+            && last_run.is_none_or(|r| r.status != "completed");
     }
 
     // Cron: due if next occurrence after last run is in the past

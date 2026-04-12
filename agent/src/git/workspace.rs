@@ -100,7 +100,7 @@ pub async fn configure_git_signing(signing: Option<&crate::config::SigningConfig
 }
 
 /// Ensure a repo is cloned in the repos directory. Returns the clone path.
-pub async fn ensure_cloned(repos_dir: &Path, repo_url: &str, github_token: &str) -> Result<PathBuf> {
+pub async fn ensure_cloned(repos_dir: &Path, repo_url: &str, _github_token: &str) -> Result<PathBuf> {
     let repo_name = repo_url
         .rsplit('/')
         .next()

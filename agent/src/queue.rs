@@ -3,6 +3,7 @@ use redis::AsyncCommands;
 use uuid::Uuid;
 
 const LOCK_TTL_SECS: u64 = 1800; // 30 minutes
+#[allow(dead_code)]
 const HEARTBEAT_SECS: u64 = 60;
 
 /// Try to acquire an exclusive lock on a task. Returns true if acquired.
