@@ -11,7 +11,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const { id } = await params;
 
   const { rows } = await pool.query(
-    "SELECT * FROM schedules WHERE id = $1 AND user_id = $2",
+    "SELECT * FROM schedules WHERE id = $1 AND (user_id = $2 OR user_id = '00000000-0000-0000-0000-000000000000')",
     [id, userId]
   );
 
@@ -57,7 +57,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const { rowCount } = await pool.query(
     `UPDATE schedules SET ${setClauses.join(", ")}
-     WHERE id = $${paramIndex} AND user_id = $${paramIndex + 1}`,
+     WHERE id = $${paramIndex} AND (user_id = $${paramIndex + 1} OR user_id = '00000000-0000-0000-0000-000000000000')`,
     values
   );
 
@@ -77,7 +77,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const { id } = await params;
 
   const { rowCount } = await pool.query(
-    "DELETE FROM schedules WHERE id = $1 AND user_id = $2",
+    "DELETE FROM schedules WHERE id = $1 AND (user_id = $2 OR user_id = '00000000-0000-0000-0000-000000000000')",
     [id, userId]
   );
 

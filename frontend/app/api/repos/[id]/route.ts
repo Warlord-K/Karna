@@ -11,7 +11,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const { id } = await params;
 
   const { rowCount } = await pool.query(
-    "DELETE FROM repo_profiles WHERE id = $1 AND user_id = $2",
+    "DELETE FROM repo_profiles WHERE id = $1 AND (user_id = $2 OR user_id = '00000000-0000-0000-0000-000000000000')",
     [id, userId]
   );
 
