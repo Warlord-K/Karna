@@ -11,16 +11,13 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
 
   const { id } = await params;
 
-  // Verify schedule belongs to user and is enabled
+  // Verify schedule belongs to user
   const { rows } = await pool.query(
-    "SELECT id, enabled FROM schedules WHERE id = $1 AND user_id = $2",
+    "SELECT id FROM schedules WHERE id = $1 AND user_id = $2",
     [id, userId]
   );
   if (rows.length === 0) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-  if (!rows[0].enabled) {
-    return NextResponse.json({ error: "Schedule is disabled" }, { status: 400 });
   }
 
   // Set Redis trigger key for the agent to pick up

@@ -9,9 +9,10 @@ interface ScheduleCardProps {
   onClick: () => void;
   onToggle: (enabled: boolean) => void;
   onTrigger: () => void;
+  isTriggering?: boolean;
 }
 
-export function ScheduleCard({ schedule, onClick, onToggle, onTrigger }: ScheduleCardProps) {
+export function ScheduleCard({ schedule, onClick, onToggle, onTrigger, isTriggering }: ScheduleCardProps) {
   const isOneShot = !!schedule.run_at;
   const lastRun = schedule.last_run;
   const lastRunColor = lastRun ? RUN_STATUS_COLORS[lastRun.status] : undefined;
@@ -40,11 +41,15 @@ export function ScheduleCard({ schedule, onClick, onToggle, onTrigger }: Schedul
         <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
           <button
             onClick={onTrigger}
-            disabled={!schedule.enabled}
+            disabled={isTriggering}
             title="Run now"
             className="h-7 w-7 flex items-center justify-center text-gray-8 hover:text-sun-9 hover:bg-gray-3 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <Lightning size={14} weight="fill" />
+            {isTriggering ? (
+              <div className="w-3.5 h-3.5 border-2 border-gray-7 border-t-sun-9 rounded-full animate-spin" />
+            ) : (
+              <Lightning size={14} weight="fill" />
+            )}
           </button>
           <button
             onClick={() => onToggle(!schedule.enabled)}

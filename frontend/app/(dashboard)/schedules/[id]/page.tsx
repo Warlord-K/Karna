@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import {
   Schedule,
   ScheduledRun,
@@ -8,10 +9,17 @@ import {
   humanizeCron,
   RUN_STATUS_COLORS,
 } from '@/lib/schedules';
-import { useScheduleRuns, useScheduleRunLogs } from '@/hooks/use-schedules';
 import {
-  X, Trash, Clock, Timer, Lightning, Terminal,
-  ArrowLeft, Article, Gear,
+  useSchedules,
+  useUpdateSchedule,
+  useDeleteSchedule,
+  useTriggerSchedule,
+  useScheduleRuns,
+  useScheduleRunLogs,
+} from '@/hooks/use-schedules';
+import {
+  ArrowLeft, Trash, Clock, Timer, Lightning, Terminal,
+  Article, Gear,
 } from '@phosphor-icons/react';
 import { formatDistanceToNow, format } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -19,41 +27,28 @@ import ReactMarkdown from 'react-markdown';
 
 type Tab = 'details' | 'runs';
 
-interface ScheduleDetailModalProps {
-  schedule: Schedule | null;
-  onClose: () => void;
-  onUpdate: (id: string, updates: Partial<Schedule>) => Promise<void>;
-  onDelete: (id: string) => Promise<void>;
-  onTrigger: (id: string) => Promise<void>;
-}
+export default function ScheduleDetailPage() {
+  const params = useParams();
+  const router = useRouter();
+  const id = params.id as string;
 
-export function ScheduleDetailModal({
-  schedule, onClose, onUpdate, onDelete, onTrigger,
-}: ScheduleDetailModalProps) {
   const [activeTab, setActiveTab] = useState<Tab>('runs');
   const [selectedRun, setSelectedRun] = useState<ScheduledRun | null>(null);
   const [loading, setLoading] = useState(false);
   const [triggering, setTriggering] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
-  const prevScheduleId = useRef<string | null>(null);
+  // Fetch the schedule from the list cache or individually
+  const { data: schedules = [] } = useSchedules();
+  const schedule = schedules.find(s => s.id === id) ?? null;
 
-  useEffect(() => {
-    if (schedule && schedule.id !== prevScheduleId.current) {
-      prevScheduleId.current = schedule.id;
-      setActiveTab('runs');
-      setSelectedRun(null);
-    }
-    if (!schedule) {
-      prevScheduleId.current = null;
-    }
-  }, [schedule]);
+  const updateMutation = useUpdateSchedule();
+  const deleteMutation = useDeleteSchedule();
+  const triggerMutation = useTriggerSchedule();
 
-  const scheduleId = schedule?.id ?? null;
-
-  const { data: runs = [] } = useScheduleRuns(scheduleId, activeTab === 'runs');
+  const { data: runs = [] } = useScheduleRuns(id, activeTab === 'runs');
   const { data: runLogs = [] } = useScheduleRunLogs(
-    scheduleId,
+    id,
     selectedRun?.id ?? null,
     selectedRun?.status === 'running'
   );
@@ -62,18 +57,33 @@ export function ScheduleDetailModal({
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [runLogs]);
 
-  if (!schedule) return null;
+  if (!schedule) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="w-5 h-5 border-2 border-gray-7 border-t-gray-12 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  const handleUpdate = async (updates: Partial<Schedule>) => {
+    await updateMutation.mutateAsync({ id, updates });
+  };
 
   const handleDelete = async () => {
     if (!confirm('Delete this schedule and all its runs?')) return;
     setLoading(true);
-    try { await onDelete(schedule.id); onClose(); } finally { setLoading(false); }
+    try {
+      await deleteMutation.mutateAsync(id);
+      router.push('/schedules');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleTrigger = async () => {
     setTriggering(true);
     try {
-      await onTrigger(schedule.id);
+      await triggerMutation.mutateAsync(id);
     } finally {
       setTriggering(false);
     }
@@ -82,24 +92,24 @@ export function ScheduleDetailModal({
   const isOneShot = !!schedule.run_at;
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: 'runs',    label: `Runs${runs.length ? ` (${runs.length})` : ''}`, icon: <Terminal size={16} weight="bold" /> },
+    { id: 'runs', label: `Runs${runs.length ? ` (${runs.length})` : ''}`, icon: <Terminal size={16} weight="bold" /> },
     { id: 'details', label: 'Details', icon: <Gear size={16} weight="bold" /> },
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-gray-1 rounded-t-2xl sm:rounded-xl shadow-modal w-full sm:max-w-4xl sm:mx-6 h-[95vh] sm:h-auto sm:max-h-[85vh] flex flex-col overflow-hidden">
-        {/* Mobile drag handle */}
-        <div className="sm:hidden flex justify-center pt-2 pb-0 flex-shrink-0">
-          <div className="w-8 h-1 rounded-full bg-gray-6" />
-        </div>
-
+    <div className="h-full overflow-y-auto">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 sm:px-6 h-12 sm:h-14 border-b border-gray-3/60 flex-shrink-0">
-          <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              onClick={() => router.push('/schedules')}
+              className="h-8 w-8 flex items-center justify-center text-gray-8 hover:text-gray-12 hover:bg-gray-3 rounded-lg transition-colors flex-shrink-0"
+            >
+              <ArrowLeft size={16} weight="bold" />
+            </button>
             <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${schedule.enabled ? 'bg-green-500' : 'bg-gray-7'}`} />
-            <h2 className="text-[15px] font-semibold text-gray-12 truncate">{schedule.name}</h2>
+            <h1 className="text-[18px] font-semibold text-gray-12 truncate">{schedule.name}</h1>
             <span className="text-xs text-gray-8 flex items-center gap-1 flex-shrink-0">
               {isOneShot ? <Timer size={12} weight="bold" /> : <Clock size={12} weight="bold" />}
               {isOneShot ? 'One-shot' : humanizeCron(schedule.cron_expression!)}
@@ -124,17 +134,17 @@ export function ScheduleDetailModal({
               )}
               <span className="hidden sm:inline">{triggering ? 'Triggering...' : 'Run Now'}</span>
             </button>
-            <button onClick={handleDelete} className="h-8 w-8 flex items-center justify-center text-gray-8 hover:text-red-400 hover:bg-gray-3 rounded-lg transition-colors">
+            <button
+              onClick={handleDelete}
+              className="h-8 w-8 flex items-center justify-center text-gray-8 hover:text-red-400 hover:bg-gray-3 rounded-lg transition-colors"
+            >
               <Trash size={16} weight="bold" />
-            </button>
-            <button onClick={onClose} className="h-8 w-8 flex items-center justify-center text-gray-8 hover:text-gray-12 hover:bg-gray-3 rounded-lg transition-colors">
-              <X size={16} weight="bold" />
             </button>
           </div>
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-gray-3/60 px-3 sm:px-6 flex-shrink-0">
+        <div className="flex border-b border-gray-3/60 mb-6">
           {selectedRun ? (
             <button
               onClick={() => setSelectedRun(null)}
@@ -154,22 +164,20 @@ export function ScheduleDetailModal({
                 }`}
               >
                 {tab.icon}
-                <span className="hidden sm:inline">{tab.label}</span>
+                {tab.label}
               </button>
             ))
           )}
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
-          {selectedRun ? (
-            <RunDetail run={selectedRun} logs={runLogs} logsEndRef={logsEndRef} />
-          ) : activeTab === 'runs' ? (
-            <RunsList runs={runs} onSelectRun={setSelectedRun} />
-          ) : (
-            <ScheduleDetails schedule={schedule} onUpdate={onUpdate} />
-          )}
-        </div>
+        {selectedRun ? (
+          <RunDetail run={selectedRun} logs={runLogs} logsEndRef={logsEndRef} />
+        ) : activeTab === 'runs' ? (
+          <RunsList runs={runs} onSelectRun={setSelectedRun} />
+        ) : (
+          <ScheduleDetails schedule={schedule} onUpdate={handleUpdate} />
+        )}
       </div>
     </div>
   );
@@ -233,7 +241,6 @@ function RunDetail({ run, logs, logsEndRef }: {
 
   return (
     <div className="space-y-4">
-      {/* Run status header */}
       <div className="flex items-center gap-3">
         <span
           className={`w-3 h-3 rounded-full ${run.status === 'running' ? 'animate-pulse' : ''}`}
@@ -250,7 +257,6 @@ function RunDetail({ run, logs, logsEndRef }: {
         )}
       </div>
 
-      {/* Summary markdown */}
       {run.summary_markdown && (
         <div className="rounded-lg bg-gray-2 border border-gray-4 p-4">
           <h3 className="text-[13px] font-medium text-gray-9 mb-3 flex items-center gap-1.5">
@@ -262,7 +268,6 @@ function RunDetail({ run, logs, logsEndRef }: {
         </div>
       )}
 
-      {/* Logs */}
       {logs.length > 0 && (
         <div>
           <h3 className="text-[13px] font-medium text-gray-9 mb-2 flex items-center gap-1.5">
@@ -295,13 +300,12 @@ function RunDetail({ run, logs, logsEndRef }: {
 
 function ScheduleDetails({ schedule, onUpdate }: {
   schedule: Schedule;
-  onUpdate: (id: string, updates: Partial<Schedule>) => Promise<void>;
+  onUpdate: (updates: Partial<Schedule>) => Promise<void>;
 }) {
   const isOneShot = !!schedule.run_at;
 
   return (
     <div className="space-y-4">
-      {/* Prompt */}
       <div>
         <label className="block text-[12px] font-medium text-gray-8 mb-2 uppercase tracking-wider">Prompt</label>
         <div className="rounded-lg bg-gray-2 border border-gray-4 p-3 text-[14px] text-gray-11 font-mono whitespace-pre-wrap">
@@ -309,7 +313,6 @@ function ScheduleDetails({ schedule, onUpdate }: {
         </div>
       </div>
 
-      {/* Config grid */}
       <div className="grid grid-cols-2 gap-3 text-[13px]">
         <div className="rounded-lg bg-gray-2 border border-gray-4 p-3">
           <span className="text-gray-8">Schedule</span>
@@ -363,7 +366,6 @@ function ScheduleDetails({ schedule, onUpdate }: {
         )}
       </div>
 
-      {/* Toggle enabled */}
       <div className="flex items-center justify-between pt-4 border-t border-gray-3">
         <div>
           <p className="text-[14px] text-gray-12 font-medium">
@@ -374,7 +376,7 @@ function ScheduleDetails({ schedule, onUpdate }: {
           </p>
         </div>
         <button
-          onClick={() => onUpdate(schedule.id, { enabled: !schedule.enabled })}
+          onClick={() => onUpdate({ enabled: !schedule.enabled })}
           className={`h-9 px-4 text-[14px] font-medium rounded-lg transition-colors ${
             schedule.enabled
               ? 'text-gray-9 hover:text-gray-12 hover:bg-gray-3'
@@ -385,7 +387,6 @@ function ScheduleDetails({ schedule, onUpdate }: {
         </button>
       </div>
 
-      {/* Timestamps */}
       <div className="text-[13px] text-gray-8 space-y-1.5 pt-4 border-t border-gray-3">
         <div className="flex items-center gap-1.5">
           <Clock size={13} weight="bold" />

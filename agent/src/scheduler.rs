@@ -58,14 +58,14 @@ pub async fn sync_config_schedules(config: &Config, db: &Database) -> Result<()>
     Ok(())
 }
 
-/// Check all enabled schedules and execute any that are due.
+/// Check all schedules and execute any that are due or manually triggered.
 /// Called from the main poll loop every iteration.
 pub async fn check_schedules(
     config: &Config,
     db: &Database,
     redis: &redis::Client,
 ) -> Result<()> {
-    let schedules = db.get_enabled_schedules().await?;
+    let schedules = db.get_all_schedules().await?;
     if schedules.is_empty() {
         return Ok(());
     }
@@ -80,20 +80,31 @@ pub async fn check_schedules(
             continue;
         }
 
-        // Check for manual trigger
+        // Check if schedule might need to run (trigger or cron-due)
         let trigger_key = format!("schedule_trigger:{}", schedule.id);
-        let triggered = queue::key_exists(redis, &trigger_key).await.unwrap_or(false);
-        if triggered {
-            queue::delete_key(redis, &trigger_key).await?;
-        }
+        let maybe_triggered = queue::key_exists(redis, &trigger_key).await.unwrap_or(false);
 
-        if !triggered && !is_schedule_due(&schedule, last_run.as_ref()) {
+        // Disabled schedules can only run via manual trigger
+        if !maybe_triggered && (!schedule.enabled || !is_schedule_due(&schedule, last_run.as_ref())) {
             continue;
         }
 
-        // Try to acquire schedule-level lock
+        // Acquire lock BEFORE consuming trigger to avoid lost triggers
         let lock_key = format!("schedule_lock:{}", schedule.id);
         if !queue::try_lock_key(redis, &lock_key, &worker).await? {
+            continue;
+        }
+
+        // Now safe to consume the trigger (we hold the lock)
+        let triggered = queue::key_exists(redis, &trigger_key).await.unwrap_or(false);
+        if triggered {
+            queue::delete_key(redis, &trigger_key).await?;
+            info!(schedule = %schedule.name, "Manual trigger consumed");
+        }
+
+        // Re-check eligibility under lock (trigger or cron-due)
+        if !triggered && !is_schedule_due(&schedule, last_run.as_ref()) {
+            queue::release_key(redis, &lock_key).await?;
             continue;
         }
 

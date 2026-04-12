@@ -178,6 +178,26 @@ fn classify_file(path: &str) -> FileCategory {
     }
 }
 
+/// Pull the self-repo (fast-forward only) so the workspace volume's HEAD
+/// matches the remote. This prevents an infinite restart loop when Docker's
+/// restart policy brings the container back before the host-side wrapper
+/// can rebuild the image.
+pub async fn pull_self_repo(repo_path: &Path, branch: &str) -> Result<()> {
+    let output = Command::new("git")
+        .current_dir(repo_path)
+        .args(["pull", "--ff-only", "origin", branch])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git pull --ff-only failed: {stderr}");
+    }
+
+    info!("Self-repo pulled to latest (prevents restart loop)");
+    Ok(())
+}
+
 async fn git_rev_parse(repo_path: &Path, rev: &str) -> Result<String> {
     let output = Command::new("git")
         .current_dir(repo_path)

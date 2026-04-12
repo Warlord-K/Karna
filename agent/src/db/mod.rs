@@ -293,9 +293,9 @@ impl Database {
 
     // --- Schedule queries ---
 
-    pub async fn get_enabled_schedules(&self) -> Result<Vec<Schedule>> {
+    pub async fn get_all_schedules(&self) -> Result<Vec<Schedule>> {
         let rows = sqlx::query_as::<_, Schedule>(
-            "SELECT * FROM schedules WHERE enabled = true ORDER BY created_at ASC",
+            "SELECT * FROM schedules ORDER BY created_at ASC",
         )
         .fetch_all(&self.pool)
         .await?;

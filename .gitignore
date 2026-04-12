@@ -5,6 +5,7 @@ target/
 .env
 config.yaml
 *.log
+.DS_STORE
 
 # Docker volumes
 pgdata/

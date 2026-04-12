@@ -1,65 +1,52 @@
 'use client';
 
 import { useState } from 'react';
-import { Schedule } from '@/lib/schedules';
+import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
+import { useAuthDisabled } from '@/lib/auth-context';
+import { useConfig } from '@/hooks/use-tasks';
 import {
   useSchedules,
   useCreateSchedule,
   useUpdateSchedule,
-  useDeleteSchedule,
   useTriggerSchedule,
 } from '@/hooks/use-schedules';
-import { ScheduleCard } from './schedule-card';
-import { CreateScheduleDialog } from './create-schedule-dialog';
-import { ScheduleDetailModal } from './schedule-detail-modal';
-import { BackendConfig } from './create-task-dialog';
+import { Schedule } from '@/lib/schedules';
+import { ScheduleCard } from '@/components/agent/schedule-card';
+import { CreateScheduleDialog } from '@/components/agent/create-schedule-dialog';
 import { Plus, CalendarBlank } from '@phosphor-icons/react';
 import toast from 'react-hot-toast';
 
-interface SchedulesPageProps {
-  repos: string[];
-  backends: Record<string, BackendConfig>;
-  skills: string[];
-  mcpServers: string[];
-}
+export default function SchedulesListPage() {
+  const authDisabled = useAuthDisabled();
+  const { status: authStatus } = useSession();
+  const isReady = authDisabled || authStatus === 'authenticated';
+  const router = useRouter();
 
-export function SchedulesPage({ repos, backends, skills, mcpServers }: SchedulesPageProps) {
   const [createOpen, setCreateOpen] = useState(false);
-  const [selectedSchedule, setSelectedSchedule] = useState<Schedule | null>(null);
 
+  const { data: config } = useConfig(isReady);
   const { data: schedules = [], isLoading } = useSchedules();
   const createMutation = useCreateSchedule();
   const updateMutation = useUpdateSchedule();
-  const deleteMutation = useDeleteSchedule();
   const triggerMutation = useTriggerSchedule();
 
-  // Keep selected schedule in sync with query data
-  const selectedScheduleData = selectedSchedule
-    ? schedules.find(s => s.id === selectedSchedule.id) ?? selectedSchedule
-    : null;
+  const repos = config?.repos ?? [];
+  const backends = config?.backends ?? {};
+  const skills = config?.skills ?? [];
+  const mcpServers = config?.mcpServers ?? [];
 
   const handleCreate = async (data: Parameters<typeof createMutation.mutateAsync>[0]) => {
     await createMutation.mutateAsync(data);
   };
 
-  const handleUpdate = async (id: string, updates: Partial<Schedule>) => {
-    await updateMutation.mutateAsync({ id, updates });
-    if (selectedSchedule?.id === id) {
-      setSelectedSchedule(prev => prev ? { ...prev, ...updates } : null);
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    await deleteMutation.mutateAsync(id);
+  const handleToggle = async (schedule: Schedule, enabled: boolean) => {
+    await updateMutation.mutateAsync({ id: schedule.id, updates: { enabled } });
+    toast.success(enabled ? 'Schedule enabled' : 'Schedule paused');
   };
 
   const handleTrigger = async (id: string) => {
     await triggerMutation.mutateAsync(id);
-  };
-
-  const handleToggle = async (schedule: Schedule, enabled: boolean) => {
-    await handleUpdate(schedule.id, { enabled });
-    toast.success(enabled ? 'Schedule enabled' : 'Schedule paused');
   };
 
   if (isLoading) {
@@ -73,7 +60,6 @@ export function SchedulesPage({ repos, backends, skills, mcpServers }: Schedules
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-        {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
             <h2 className="text-[18px] font-semibold text-gray-12 tracking-[-0.02em]">Schedules</h2>
@@ -88,7 +74,6 @@ export function SchedulesPage({ repos, backends, skills, mcpServers }: Schedules
           </button>
         </div>
 
-        {/* Schedule list */}
         {schedules.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-gray-8">
             <CalendarBlank size={48} weight="thin" className="mb-4" />
@@ -109,7 +94,7 @@ export function SchedulesPage({ repos, backends, skills, mcpServers }: Schedules
               <ScheduleCard
                 key={schedule.id}
                 schedule={schedule}
-                onClick={() => setSelectedSchedule(schedule)}
+                onClick={() => router.push(`/schedules/${schedule.id}`)}
                 onToggle={(enabled) => handleToggle(schedule, enabled)}
                 onTrigger={() => handleTrigger(schedule.id)}
                 isTriggering={triggerMutation.isPending && triggerMutation.variables === schedule.id}
@@ -127,14 +112,6 @@ export function SchedulesPage({ repos, backends, skills, mcpServers }: Schedules
         skills={skills}
         mcpServers={mcpServers}
         onCreateSchedule={handleCreate}
-      />
-
-      <ScheduleDetailModal
-        schedule={selectedScheduleData}
-        onClose={() => setSelectedSchedule(null)}
-        onUpdate={handleUpdate}
-        onDelete={handleDelete}
-        onTrigger={handleTrigger}
       />
     </div>
   );

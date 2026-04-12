@@ -192,6 +192,12 @@ async fn main() -> anyhow::Result<()> {
                         info!(change_type = ?change, "Self-repo update detected");
                         if change.needs_rebuild() {
                             info!("Code changes detected — initiating graceful shutdown for rebuild");
+                            // Pull self-repo so workspace volume HEAD matches remote.
+                            // Prevents infinite restart loop if Docker restarts the
+                            // container before the host-side wrapper can rebuild.
+                            if let Err(e) = updater::pull_self_repo(&repo_path, &self_repo.branch).await {
+                                warn!(error = %e, "Failed to pull self-repo (restart loop may occur)");
+                            }
                             needs_rebuild = true;
                             poll_shutdown.store(true, Ordering::SeqCst);
                         } else {
