@@ -1056,6 +1056,7 @@ dependencies = [
  "cbc",
  "chrono",
  "dotenvy",
+ "hex",
  "hkdf",
  "hmac",
  "indexmap",

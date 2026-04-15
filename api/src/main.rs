@@ -89,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route("/webhooks/github", post(routes::webhooks::github_webhook))
         .nest("/api", api)
         .layer(cors)
         .with_state(state);

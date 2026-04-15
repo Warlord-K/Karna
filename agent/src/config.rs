@@ -184,8 +184,9 @@ fn default_phase() -> String {
     "both".to_string()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct ConfigFile {
+    #[serde(default)]
     repos: Vec<RepoConfig>,
     #[serde(default)]
     agent: AgentFileConfig,
@@ -259,18 +260,9 @@ impl Config {
                 .with_context(|| format!("Failed to read config file: {config_path}"))?;
             serde_yaml::from_str::<ConfigFile>(&contents)
                 .with_context(|| format!("Failed to parse config file: {config_path}"))?
-        } else if path.is_dir() {
-            anyhow::bail!(
-                "{config_path} is a directory, not a file. \
-                 This usually happens when Docker creates a placeholder directory \
-                 because config.yaml was missing. Fix: create config.yaml with your \
-                 repos and settings, then restart."
-            );
         } else {
-            anyhow::bail!(
-                "Config file not found at {config_path}. \
-                 Create config.yaml with your repos and settings, then restart."
-            );
+            tracing::warn!("Config file not found at {config_path}, using defaults (repos/schedules from DB)");
+            ConfigFile::default()
         };
 
         let repos_dir = PathBuf::from(

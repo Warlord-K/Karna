@@ -23,6 +23,7 @@ hkdf = "0.12"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
 base64 = "0.22"
+hex = "0.4"
 anyhow = "1"
 dotenvy = "0.15"
 indexmap = { version = "2", features = ["serde"] }
