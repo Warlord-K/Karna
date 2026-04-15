@@ -47,6 +47,7 @@ services:
       REDIS_URL: redis://redis:6379
       AUTH_SECRET: ${AUTH_SECRET}
       AUTH_DISABLED: ${AUTH_DISABLED:-}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:${FRONTEND_PORT:-3000}}
       CONFIG_PATH: /etc/karna/config.yaml
       PORT: "8081"
     volumes:
