@@ -4,7 +4,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::{AgentLog, AgentTask, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog};
+use crate::models::{AgentLog, AgentTask, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment};
 
 #[derive(Clone)]
 pub struct Database {
@@ -359,6 +359,32 @@ impl Database {
             return Ok(true);
         }
         Ok(false)
+    }
+
+    // --- Attachment queries ---
+
+    pub async fn get_task_attachments(&self, task_id: Uuid) -> Result<Vec<TaskAttachment>> {
+        let attachments = sqlx::query_as::<_, TaskAttachment>(
+            "SELECT * FROM task_attachments WHERE task_id = $1 ORDER BY created_at ASC",
+        )
+        .bind(task_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(attachments)
+    }
+
+    /// Copy all attachments from one task to another (used when creating subtasks from a parent).
+    pub async fn copy_task_attachments(&self, from_task_id: Uuid, to_task_id: Uuid) -> Result<u64> {
+        let result = sqlx::query(
+            r#"INSERT INTO task_attachments (task_id, filename, content_type, data, size_bytes)
+               SELECT $1, filename, content_type, data, size_bytes
+               FROM task_attachments WHERE task_id = $2"#,
+        )
+        .bind(to_task_id)
+        .bind(from_task_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 
     // --- Log queries ---

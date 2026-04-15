@@ -4,7 +4,7 @@ You are an autonomous coding agent. Your job is to analyze the codebase and crea
 Title: {title}
 Description:
 {description}
-
+{images_section}
 ## Repository
 {repo}
 

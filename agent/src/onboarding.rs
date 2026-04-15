@@ -77,6 +77,7 @@ async fn onboard_repo(config: &Config, db: &Database, profile: &RepoProfile) -> 
         mcp_config_json: None,
         session_id: None,
         event_tx: None,
+        image_paths: Vec::new(),
     })
     .await?;
 

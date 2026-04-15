@@ -60,6 +60,14 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
         cmd.arg("--mcp-config").arg(mcp_json);
     }
 
+    // Attach images for vision input
+    for image_path in &opts.image_paths {
+        cmd.arg("--image").arg(image_path);
+    }
+    if !opts.image_paths.is_empty() {
+        info!(image_count = opts.image_paths.len(), "Attaching images to Claude Code");
+    }
+
     // Pipe prompt via stdin (avoids Linux MAX_ARG_STRLEN 128KB limit)
     cmd.stdin(std::process::Stdio::piped());
     cmd.stdout(std::process::Stdio::piped());

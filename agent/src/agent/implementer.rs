@@ -44,6 +44,31 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
     let (repo_skills, merged_mcp) = discover_all_extensions(config, &worktree_paths).await;
 
     // 3. Build implementation prompt with skills
+    let working_dir = worktree_paths.first().unwrap();
+
+    // Fetch task attachments and write to temp files outside worktree to avoid git interference
+    let attachments = db.get_task_attachments(task.id).await.unwrap_or_default();
+    let images_dir = std::path::PathBuf::from(format!("/tmp/karna-images-{}", task.id));
+    let mut image_paths = Vec::new();
+    if !attachments.is_empty() {
+        tokio::fs::create_dir_all(&images_dir).await.ok();
+        for att in &attachments {
+            let path = images_dir.join(&att.filename);
+            if let Err(e) = tokio::fs::write(&path, &att.data).await {
+                tracing::warn!(filename = %att.filename, error = %e, "Failed to write attachment");
+                continue;
+            }
+            image_paths.push(path);
+        }
+        db.insert_log(task.id, "implement", &format!("Loaded {} image attachment(s)", attachments.len()), "info", None).await?;
+    }
+
+    let images_section = if !attachments.is_empty() {
+        format!("\n## Attached Images\nThis task includes {} image(s) for visual context. Refer to them as needed during implementation.\n", attachments.len())
+    } else {
+        String::new()
+    };
+
     let description = task.description.as_deref().unwrap_or("No description provided.");
     let plan = task.plan_content.as_deref().unwrap_or("No plan available.");
 
@@ -56,6 +81,7 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
     let mut prompt = include_str!("../../templates/implement_prompt.txt").to_string();
     prompt = prompt.replace("{title}", &task.title);
     prompt = prompt.replace("{description}", description);
+    prompt = prompt.replace("{images_section}", &images_section);
     prompt = prompt.replace("{plan}", plan);
     prompt = prompt.replace("{feedback_section}", &feedback_section);
 
@@ -65,7 +91,6 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
 
     // 4. Run CLI backend (Claude Code or Codex)
     let mcp_json_str = merged_mcp.map(|v| v.to_string());
-    let working_dir = worktree_paths.first().unwrap();
     let cli_name = task.cli.as_deref().unwrap_or_else(|| config.default_cli());
     let model = task.model.as_deref().unwrap_or_else(|| config.default_model(cli_name));
 
@@ -83,8 +108,14 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
         mcp_config_json: mcp_json_str,
         session_id: None,
         event_tx: Some(event_tx),
+        image_paths: image_paths.clone(),
     })
     .await?;
+
+    // Clean up temp image files
+    if !image_paths.is_empty() {
+        tokio::fs::remove_dir_all(&images_dir).await.ok();
+    }
 
     db.add_cost(task.id, result.cost_usd).await?;
 
@@ -199,6 +230,22 @@ pub async fn apply_feedback(config: &Config, db: &Database, task: &AgentTask) ->
 
     let combined_feedback = all_feedback.join("\n\n");
 
+    // Fetch task attachments for visual context during feedback
+    let attachments = db.get_task_attachments(task.id).await.unwrap_or_default();
+    let feedback_images_dir = std::path::PathBuf::from(format!("/tmp/karna-feedback-images-{}", task.id));
+    let mut feedback_image_paths = Vec::new();
+    if !attachments.is_empty() {
+        tokio::fs::create_dir_all(&feedback_images_dir).await.ok();
+        for att in &attachments {
+            let path = feedback_images_dir.join(&att.filename);
+            if let Err(e) = tokio::fs::write(&path, &att.data).await {
+                tracing::warn!(filename = %att.filename, error = %e, "Failed to write attachment");
+                continue;
+            }
+            feedback_image_paths.push(path);
+        }
+    }
+
     let description = task.description.as_deref().unwrap_or("");
     let plan = task.plan_content.as_deref().unwrap_or("");
 
@@ -269,8 +316,14 @@ Description: {description}
         mcp_config_json: mcp_json_str,
         session_id: task.agent_session_id.as_deref(),
         event_tx: Some(event_tx),
+        image_paths: feedback_image_paths.clone(),
     })
     .await?;
+
+    // Clean up temp image files
+    if !feedback_image_paths.is_empty() {
+        tokio::fs::remove_dir_all(&feedback_images_dir).await.ok();
+    }
 
     db.add_cost(task.id, result.cost_usd).await?;
 

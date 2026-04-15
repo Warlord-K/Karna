@@ -4,7 +4,7 @@ You are an autonomous coding agent. Implement the following plan.
 Title: {title}
 Description:
 {description}
-
+{images_section}
 ## Plan
 {plan}
 

@@ -3,6 +3,11 @@ const nextConfig = {
   output: 'standalone',
   eslint: { ignoreDuringBuilds: true },
   typescript: { ignoreBuildErrors: true },
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '10mb',
+    },
+  },
 
   // Proxy all /api/* requests (except auth) to the Rust API server.
   // This avoids CORS issues and keeps auth cookies flowing through same-origin.

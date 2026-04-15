@@ -147,6 +147,20 @@ pub struct AgentLog {
     pub created_at: Option<DateTime<Utc>>,
 }
 
+// --- Task attachment models ---
+
+#[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
+pub struct TaskAttachment {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub filename: String,
+    pub content_type: String,
+    pub data: Vec<u8>,
+    pub size_bytes: i64,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
 // --- Schedule models ---
 
 #[derive(Debug, Clone, FromRow, Serialize)]

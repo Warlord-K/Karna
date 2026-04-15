@@ -25,6 +25,7 @@ import {
 } from '@phosphor-icons/react';
 import toast from 'react-hot-toast';
 import { MarkdownEditor } from '@/components/agent/markdown-editor';
+import { TaskAttachments } from '@/components/agent/task-attachments';
 import { formatDistanceToNow, format } from 'date-fns';
 import { useSession } from 'next-auth/react';
 import { useAuthDisabled } from '@/lib/auth-context';
@@ -266,6 +267,11 @@ export default function TaskDetailPage() {
                 placeholder="Add a description..."
               />
             </div>
+
+            <TaskAttachments
+              taskId={task.id}
+              editable={['todo', 'plan_review', 'planning'].includes(task.status)}
+            />
 
             {task.error_message && (
               <div className="flex items-start gap-3 p-4 rounded-lg bg-red-500/8 border border-red-500/15">
