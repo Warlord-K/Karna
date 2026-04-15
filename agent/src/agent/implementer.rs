@@ -313,7 +313,12 @@ Description: {description}
     let cli_name = task.cli.as_deref().unwrap_or_else(|| config.default_cli());
     let model = task.model.as_deref().unwrap_or_else(|| config.default_model(cli_name));
 
-    db.insert_log(task.id, "feedback", &format!("Invoking {cli_name} ({model}) to apply feedback (resuming session)"), "command", None).await?;
+    let has_session = task.agent_session_id.is_some();
+    if has_session {
+        db.insert_log(task.id, "feedback", &format!("Invoking {cli_name} ({model}) to apply feedback (resuming session)"), "command", None).await?;
+    } else {
+        db.insert_log(task.id, "feedback", &format!("Invoking {cli_name} ({model}) to apply feedback"), "command", None).await?;
+    }
 
     let event_tx = super::spawn_log_consumer(db.clone(), task.id, "feedback");
 
@@ -324,13 +329,38 @@ Description: {description}
         allowed_tools: Some("Read,Write,Edit,Glob,Grep,Bash"),
         max_turns: config.max_turns,
         model,
-        mcp_config_json: mcp_json_str,
+        mcp_config_json: mcp_json_str.clone(),
         session_id: task.agent_session_id.as_deref(),
-        resume: task.agent_session_id.is_some(),
+        resume: has_session,
         event_tx: Some(event_tx),
         image_paths: feedback_image_paths.clone(),
     })
-    .await?;
+    .await;
+
+    // If session resume failed, retry without session
+    let result = match result {
+        Ok(r) => r,
+        Err(e) if has_session => {
+            info!(task_id = %task.id, error = %e, "Session resume failed, retrying without session");
+            db.insert_log(task.id, "feedback", "Session expired, retrying with fresh session", "warning", None).await?;
+            let event_tx = super::spawn_log_consumer(db.clone(), task.id, "feedback");
+            cli::run(cli_name, CliOptions {
+                working_dir,
+                prompt: &prompt,
+                system_prompt: config.instructions.as_deref(),
+                allowed_tools: Some("Read,Write,Edit,Glob,Grep,Bash"),
+                max_turns: config.max_turns,
+                model,
+                mcp_config_json: mcp_json_str,
+                session_id: None,
+                resume: false,
+                event_tx: Some(event_tx),
+                image_paths: feedback_image_paths.clone(),
+            })
+            .await?
+        }
+        Err(e) => return Err(e),
+    };
 
     // Clean up temp image files
     if !feedback_image_paths.is_empty() {
