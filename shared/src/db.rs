@@ -4,7 +4,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::{AgentLog, AgentTask, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog};
+use crate::models::{AgentLog, AgentTask, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment};
 
 #[derive(Clone)]
 pub struct Database {
@@ -359,6 +359,18 @@ impl Database {
             return Ok(true);
         }
         Ok(false)
+    }
+
+    // --- Attachment queries ---
+
+    pub async fn get_task_attachments(&self, task_id: Uuid) -> Result<Vec<TaskAttachment>> {
+        let attachments = sqlx::query_as::<_, TaskAttachment>(
+            "SELECT * FROM task_attachments WHERE task_id = $1 ORDER BY created_at ASC",
+        )
+        .bind(task_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(attachments)
     }
 
     // --- Log queries ---

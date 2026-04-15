@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
 /// Events streamed from the CLI process as it works.
@@ -36,6 +36,7 @@ pub struct CliOptions<'a> {
     pub mcp_config_json: Option<String>,
     pub session_id: Option<&'a str>,
     pub event_tx: Option<EventSender>,
+    pub image_paths: Vec<PathBuf>,
 }
 
 /// Summarize tool input for log display.

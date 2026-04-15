@@ -61,12 +61,36 @@ pub async fn plan_task(config: &Config, db: &Database, task: &AgentTask) -> Resu
     // Discover repo skills + MCP from all repos
     let (repo_skills, merged_mcp) = discover_all_extensions(config, &workspace_paths).await;
 
+    // Fetch task attachments and write to temp files outside working dir
+    let attachments = db.get_task_attachments(task.id).await.unwrap_or_default();
+    let images_dir = std::path::PathBuf::from(format!("/tmp/karna-plan-images-{}", task.id));
+    let mut image_paths = Vec::new();
+    if !attachments.is_empty() {
+        tokio::fs::create_dir_all(&images_dir).await.ok();
+        for att in &attachments {
+            let path = images_dir.join(&att.filename);
+            if let Err(e) = tokio::fs::write(&path, &att.data).await {
+                tracing::warn!(filename = %att.filename, error = %e, "Failed to write attachment");
+                continue;
+            }
+            image_paths.push(path);
+        }
+        db.insert_log(task.id, "plan", &format!("Loaded {} image attachment(s)", attachments.len()), "info", None).await?;
+    }
+
+    let images_section = if !attachments.is_empty() {
+        format!("\n## Attached Images\nThis task includes {} image(s) for visual context. Review them carefully as part of your planning.\n", attachments.len())
+    } else {
+        String::new()
+    };
+
     // Build prompt
     let description = task.description.as_deref().unwrap_or("No description provided.");
     let repo_display = task.repo.as_deref().unwrap_or("Multiple repositories (see subtask instructions below)");
     let mut prompt = include_str!("../../templates/plan_prompt.txt").to_string();
     prompt = prompt.replace("{title}", &task.title);
     prompt = prompt.replace("{description}", description);
+    prompt = prompt.replace("{images_section}", &images_section);
     prompt = prompt.replace("{repo}", repo_display);
 
     // If no repo is set, this is a potential multi-repo parent task — ask for subtask breakdown
@@ -141,8 +165,14 @@ Rules for subtasks:
         mcp_config_json: mcp_json_str,
         session_id: None,
         event_tx: Some(event_tx),
+        image_paths: image_paths.clone(),
     })
     .await?;
+
+    // Clean up temp image files
+    if !image_paths.is_empty() {
+        tokio::fs::remove_dir_all(&images_dir).await.ok();
+    }
 
     db.add_cost(task.id, result.cost_usd).await?;
 

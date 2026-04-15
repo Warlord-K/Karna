@@ -283,6 +283,7 @@ async fn execute_schedule_inner(
             mcp_config_json: mcp_json_str,
             session_id: None,
             event_tx: Some(event_tx),
+            image_paths: Vec::new(),
         },
     )
     .await?;

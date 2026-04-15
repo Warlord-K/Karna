@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::cli::{CliOptions, CliResult, StreamEvent};
 
@@ -47,16 +47,44 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
     // Model
     cmd.arg("--model").arg(opts.model);
 
+    // Warn if images are attached — Codex doesn't support image input
+    if !opts.image_paths.is_empty() {
+        warn!(
+            count = opts.image_paths.len(),
+            "Codex backend does not support image inputs — images will be ignored"
+        );
+    }
+
     // Build the full prompt: preamble + system prompt + task prompt
     // When resuming, only send the new prompt (context is in the session)
     let full_prompt = if resuming {
-        opts.prompt.to_string()
+        let mut p = opts.prompt.to_string();
+        if !opts.image_paths.is_empty() {
+            let filenames: Vec<String> = opts.image_paths.iter()
+                .filter_map(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
+                .collect();
+            p.push_str(&format!(
+                "\n\nNote: This task has {} attached image(s) that cannot be displayed in this backend. The image filenames are: {}. Ask the user for text descriptions if needed.",
+                opts.image_paths.len(), filenames.join(", ")
+            ));
+        }
+        p
     } else {
         let mut parts = vec![AGENT_PREAMBLE.to_string()];
         if let Some(sys) = opts.system_prompt {
             parts.push(sys.to_string());
         }
-        parts.push(opts.prompt.to_string());
+        let mut task_prompt = opts.prompt.to_string();
+        if !opts.image_paths.is_empty() {
+            let filenames: Vec<String> = opts.image_paths.iter()
+                .filter_map(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
+                .collect();
+            task_prompt.push_str(&format!(
+                "\n\nNote: This task has {} attached image(s) that cannot be displayed in this backend. The image filenames are: {}. Ask the user for text descriptions if needed.",
+                opts.image_paths.len(), filenames.join(", ")
+            ));
+        }
+        parts.push(task_prompt);
         parts.join("\n\n")
     };
 
