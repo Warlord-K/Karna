@@ -107,6 +107,7 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
         model,
         mcp_config_json: mcp_json_str,
         session_id: None,
+        resume: false,
         event_tx: Some(event_tx),
         image_paths: image_paths.clone(),
     })
@@ -126,6 +127,8 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
     db.insert_log(task.id, "implement", "Claude Code finished, committing changes", "info", None).await?;
 
     // 5. Commit and push for each worktree
+    let mut any_pr_created = false;
+
     for (i, worktree_path) in worktree_paths.iter().enumerate() {
         let repo_ref = &repo_refs[i];
         let base_branch = config
@@ -184,6 +187,14 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
 
         db.set_pr(task.id, &pr.url, pr.number).await?;
         db.insert_log(task.id, "git", &format!("PR opened: {}", pr.url), "info", None).await?;
+        any_pr_created = true;
+    }
+
+    // If no repos had changes, fail the task so it doesn't loop forever
+    if !any_pr_created {
+        db.insert_log(task.id, "implement", "Implementation produced no changes across all repos", "error", None).await?;
+        db.set_error(task.id, "Implementation produced no code changes. The agent may need a clearer task description or plan.").await?;
+        return Ok(());
     }
 
     // Only clear feedback if no new comments arrived during execution.
@@ -315,6 +326,7 @@ Description: {description}
         model,
         mcp_config_json: mcp_json_str,
         session_id: task.agent_session_id.as_deref(),
+        resume: task.agent_session_id.is_some(),
         event_tx: Some(event_tx),
         image_paths: feedback_image_paths.clone(),
     })

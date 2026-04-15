@@ -139,14 +139,29 @@ pub async fn checkout_and_pull(repo_path: &Path, branch: &str) -> Result<()> {
 }
 
 /// Create a git worktree for isolated task work.
+/// If a worktree already exists at the path on the correct branch, reuse it
+/// (preserves previous commits from earlier implementation attempts).
 pub async fn create_worktree(
     repo_path: &Path,
     worktree_path: &Path,
     branch_name: &str,
     base_branch: &str,
 ) -> Result<()> {
-    // Clean up existing worktree at this path if it exists
+    // If the worktree already exists, check if it's on the right branch
     if worktree_path.exists() {
+        let current_branch = run_git_output(worktree_path, &["rev-parse", "--abbrev-ref", "HEAD"]).await;
+        if let Ok(branch) = current_branch {
+            if branch.trim() == branch_name {
+                info!(
+                    worktree = %worktree_path.display(),
+                    branch = branch_name,
+                    "Reusing existing worktree"
+                );
+                ensure_agents_md_symlink(worktree_path).await;
+                return Ok(());
+            }
+        }
+        // Wrong branch or broken worktree — clean up and recreate
         let _ = run_git(repo_path, &["worktree", "remove", "--force", &worktree_path.to_string_lossy()]).await;
         let _ = tokio::fs::remove_dir_all(worktree_path).await;
     }

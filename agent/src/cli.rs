@@ -35,6 +35,7 @@ pub struct CliOptions<'a> {
     pub model: &'a str,
     pub mcp_config_json: Option<String>,
     pub session_id: Option<&'a str>,
+    pub resume: bool,
     pub event_tx: Option<EventSender>,
     pub image_paths: Vec<PathBuf>,
 }

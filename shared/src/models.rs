@@ -108,13 +108,38 @@ impl AgentTask {
 
     pub fn agent_branch_name(&self) -> String {
         let number = self.task_number.unwrap_or(0);
-        let title_slug = slug::slugify(&self.title);
+
+        // Extract prefix from title if it matches "PREFIX-NNN: ..." pattern
+        // e.g., "Bug-001: Fix login" → prefix = "Bug", slug of the rest
+        let (prefix, slug_source) = if let Some(colon_pos) = self.title.find(':') {
+            let before_colon = &self.title[..colon_pos];
+            // Check if it's a PREFIX-NNN pattern
+            if let Some(dash_pos) = before_colon.rfind('-') {
+                let candidate = &before_colon[..dash_pos];
+                let after_dash = &before_colon[dash_pos + 1..];
+                if !candidate.is_empty()
+                    && candidate.chars().all(|c| c.is_alphanumeric() || c == '-')
+                    && after_dash.chars().all(|c| c.is_ascii_digit())
+                {
+                    let rest = self.title[colon_pos + 1..].trim();
+                    (candidate.to_lowercase(), rest.to_string())
+                } else {
+                    ("kar".to_string(), self.title.clone())
+                }
+            } else {
+                ("kar".to_string(), self.title.clone())
+            }
+        } else {
+            ("kar".to_string(), self.title.clone())
+        };
+
+        let title_slug = slug::slugify(&slug_source);
         let truncated = if title_slug.len() > 40 {
             &title_slug[..40]
         } else {
             &title_slug
         };
-        format!("kar-{number}/{truncated}")
+        format!("{prefix}-{number}/{truncated}")
     }
 
     pub fn repos(&self) -> Vec<&str> {

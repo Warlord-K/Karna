@@ -176,6 +176,7 @@ Rules for subtasks:
         model,
         mcp_config_json: mcp_json_str,
         session_id: None,
+        resume: false,
         event_tx: Some(event_tx),
         image_paths: image_paths.clone(),
     })

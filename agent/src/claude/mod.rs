@@ -41,7 +41,11 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
 
     // Session tracking
     if let Some(sid) = opts.session_id {
-        cmd.arg("--session-id").arg(sid);
+        if opts.resume {
+            cmd.arg("--resume").arg(sid);
+        } else {
+            cmd.arg("--session-id").arg(sid);
+        }
     }
 
     // System prompt (separate from task prompt)
@@ -109,6 +113,7 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
     let mut result_text = String::new();
     let mut session_id = None;
     let mut cost_usd = 0.0;
+    let mut is_error_response = false;
 
     while let Some(line) = lines.next_line().await? {
         let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) else {
@@ -156,6 +161,10 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
                     .get("total_cost_usd")
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0);
+                is_error_response = json
+                    .get("subtype")
+                    .and_then(|v| v.as_str())
+                    == Some("error_response");
             }
             _ => {}
         }
@@ -169,6 +178,13 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
 
     if !stderr.is_empty() {
         debug!(stderr = %stderr, "Claude stderr");
+    }
+
+    if is_error_response {
+        if let Some(tx) = &opts.event_tx {
+            let _ = tx.send(StreamEvent::Error(result_text.clone()));
+        }
+        anyhow::bail!("Claude Code returned error: {result_text}");
     }
 
     if exit_code != 0 && result_text.is_empty() {

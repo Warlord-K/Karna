@@ -206,8 +206,10 @@ async fn github_webhook(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    // Only handle agent branches (kar-{number}/slug format)
-    if !branch.starts_with("kar-") {
+    // Only handle agent branches ({prefix}-{number}/slug format)
+    if !branch.contains('/') || !branch.split('/').next().map_or(false, |p| {
+        p.rfind('-').map_or(false, |i| p[i + 1..].chars().all(|c| c.is_ascii_digit()) && i > 0)
+    }) {
         return StatusCode::OK;
     }
 
