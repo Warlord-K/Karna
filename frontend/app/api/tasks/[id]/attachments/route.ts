@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRequiredUserId } from "@/lib/api-auth";
 import { pool } from "@/lib/db";
 
+const DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000";
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const MAX_ATTACHMENTS_PER_TASK = 10;
@@ -19,8 +20,8 @@ export async function GET(
   const { id } = await params;
 
   const { rowCount } = await pool.query(
-    "SELECT 1 FROM agent_tasks WHERE id = $1 AND user_id = $2",
-    [id, userId]
+    "SELECT 1 FROM agent_tasks WHERE id = $1 AND (user_id = $2 OR user_id = $3)",
+    [id, userId, DEFAULT_USER_ID]
   );
 
   if (rowCount === 0) {
@@ -48,8 +49,8 @@ export async function POST(
   const { id } = await params;
 
   const { rowCount } = await pool.query(
-    "SELECT 1 FROM agent_tasks WHERE id = $1 AND user_id = $2",
-    [id, userId]
+    "SELECT 1 FROM agent_tasks WHERE id = $1 AND (user_id = $2 OR user_id = $3)",
+    [id, userId, DEFAULT_USER_ID]
   );
 
   if (rowCount === 0) {

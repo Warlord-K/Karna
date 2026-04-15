@@ -205,9 +205,20 @@ async fn execute_schedule_inner(
     schedule: &Schedule,
     run: &ScheduledRun,
 ) -> Result<()> {
-    // Determine which repos to explore
+    // Determine which repos to explore — DB is source of truth (includes UI-added repos)
     let repos_to_use: Vec<String> = if schedule.repos().is_empty() {
-        config.repos.iter().map(|r| r.repo.clone()).collect()
+        let db_repos: Vec<String> = db
+            .get_all_repo_profiles()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| p.repo)
+            .collect();
+        if db_repos.is_empty() {
+            config.repos.iter().map(|r| r.repo.clone()).collect()
+        } else {
+            db_repos
+        }
     } else {
         schedule.repos().iter().map(|s| s.to_string()).collect()
     };

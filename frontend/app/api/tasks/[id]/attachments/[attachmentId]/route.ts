@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRequiredUserId } from "@/lib/api-auth";
 import { pool } from "@/lib/db";
 
+const DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000";
+
 /** DELETE /api/tasks/[id]/attachments/[attachmentId] — Delete a specific attachment */
 export async function DELETE(
   _req: NextRequest,
@@ -16,8 +18,8 @@ export async function DELETE(
 
   // Verify task ownership
   const { rowCount: taskCount } = await pool.query(
-    "SELECT 1 FROM agent_tasks WHERE id = $1 AND user_id = $2",
-    [id, userId]
+    "SELECT 1 FROM agent_tasks WHERE id = $1 AND (user_id = $2 OR user_id = $3)",
+    [id, userId, DEFAULT_USER_ID]
   );
 
   if (taskCount === 0) {

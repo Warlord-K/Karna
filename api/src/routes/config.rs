@@ -10,10 +10,13 @@ pub async fn get(
 ) -> Result<Json<Value>, StatusCode> {
     let config = &state.config;
 
-    let repos: Vec<Value> = config
+    // Start with config repos
+    let mut seen = std::collections::HashSet::new();
+    let mut repos: Vec<Value> = config
         .repos
         .iter()
         .map(|r| {
+            seen.insert(r.repo.clone());
             json!({
                 "repo": r.repo,
                 "name": r.repo.split('/').last().unwrap_or(&r.repo),
@@ -21,6 +24,19 @@ pub async fn get(
             })
         })
         .collect();
+
+    // Merge in DB repos (added via UI) that aren't already in config
+    if let Ok(db_profiles) = state.db.get_all_repo_profiles().await {
+        for p in db_profiles {
+            if seen.insert(p.repo.clone()) {
+                repos.push(json!({
+                    "repo": p.repo,
+                    "name": p.repo.split('/').last().unwrap_or(&p.repo),
+                    "branch": p.branch,
+                }));
+            }
+        }
+    }
 
     let mut backends = serde_json::Map::new();
     for (name, cfg) in &config.backends {

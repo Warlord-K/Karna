@@ -14,9 +14,21 @@ pub async fn plan_task(config: &Config, db: &Database, task: &AgentTask) -> Resu
     db.update_status(task.id, TaskStatus::Planning.as_str()).await?;
     db.insert_log(task.id, "plan", &format!("Starting planning for: {}", task.title), "info", None).await?;
 
-    // Setup workspace — for parent tasks without repo, use all configured repos
+    // Setup workspace — for parent tasks without repo, use all known repos (DB + config)
     let repos_to_use: Vec<String> = if task.repos().is_empty() {
-        config.repos.iter().map(|r| r.repo.clone()).collect()
+        // DB is source of truth (includes UI-added repos), fall back to config
+        let db_repos: Vec<String> = db
+            .get_all_repo_profiles()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| p.repo)
+            .collect();
+        if db_repos.is_empty() {
+            config.repos.iter().map(|r| r.repo.clone()).collect()
+        } else {
+            db_repos
+        }
     } else {
         task.repos().iter().map(|s| s.to_string()).collect()
     };
@@ -95,7 +107,7 @@ pub async fn plan_task(config: &Config, db: &Database, task: &AgentTask) -> Resu
 
     // If no repo is set, this is a potential multi-repo parent task — ask for subtask breakdown
     let subtask_section = if task.repo.is_none() {
-        let repo_list: Vec<String> = config.repos.iter().map(|r| format!("- `{}`", r.repo)).collect();
+        let repo_list: Vec<String> = repos_to_use.iter().map(|r| format!("- `{}`", r)).collect();
 
         // Inject repo profiles if available
         let profile_context = if has_all_profiles {

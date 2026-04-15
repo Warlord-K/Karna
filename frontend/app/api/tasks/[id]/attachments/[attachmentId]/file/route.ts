@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRequiredUserId } from "@/lib/api-auth";
 import { pool } from "@/lib/db";
 
+const DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000";
+
 /** GET /api/tasks/[id]/attachments/[attachmentId]/file — Serve image binary */
 export async function GET(
   _req: NextRequest,
@@ -16,8 +18,8 @@ export async function GET(
 
   // Verify task ownership
   const { rowCount: taskCount } = await pool.query(
-    "SELECT 1 FROM agent_tasks WHERE id = $1 AND user_id = $2",
-    [id, userId]
+    "SELECT 1 FROM agent_tasks WHERE id = $1 AND (user_id = $2 OR user_id = $3)",
+    [id, userId, DEFAULT_USER_ID]
   );
 
   if (taskCount === 0) {

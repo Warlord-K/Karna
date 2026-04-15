@@ -74,16 +74,18 @@ impl Database {
         Ok(task)
     }
 
-    /// List all tasks for a given user, ordered by priority then creation date.
+    /// List all tasks for a given user (includes default system user), ordered by priority then creation date.
     pub async fn list_tasks_for_user(&self, user_id: Uuid) -> Result<Vec<AgentTask>> {
+        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         let tasks = sqlx::query_as::<_, AgentTask>(
             r#"SELECT * FROM agent_tasks
-               WHERE user_id = $1
+               WHERE user_id = $1 OR user_id = $2
                ORDER BY
                  CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
                  created_at ASC"#,
         )
         .bind(user_id)
+        .bind(default_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(tasks)
@@ -154,11 +156,13 @@ impl Database {
         }
 
         // Build a dynamic query — we need to use raw SQL here
+        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         let sql = format!(
-            "UPDATE agent_tasks SET {} WHERE id = ${} AND user_id = ${}",
+            "UPDATE agent_tasks SET {} WHERE id = ${} AND (user_id = ${} OR user_id = ${})",
             set_clauses.join(", "),
             idx,
             idx + 1,
+            idx + 2,
         );
 
         let mut query = sqlx::query(&sql);
@@ -169,19 +173,23 @@ impl Database {
                 query = query.bind(val);
             }
         }
-        query = query.bind(id).bind(user_id);
+        query = query.bind(id).bind(user_id).bind(default_id);
 
         let result = query.execute(&self.pool).await?;
         Ok(result.rows_affected())
     }
 
-    /// Delete a task (must belong to user).
+    /// Delete a task (must belong to user or default system user).
     pub async fn delete_task(&self, id: Uuid, user_id: Uuid) -> Result<u64> {
-        let result = sqlx::query("DELETE FROM agent_tasks WHERE id = $1 AND user_id = $2")
-            .bind(id)
-            .bind(user_id)
-            .execute(&self.pool)
-            .await?;
+        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
+        let result = sqlx::query(
+            "DELETE FROM agent_tasks WHERE id = $1 AND (user_id = $2 OR user_id = $3)",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(default_id)
+        .execute(&self.pool)
+        .await?;
         Ok(result.rows_affected())
     }
 
@@ -426,13 +434,15 @@ impl Database {
         Ok(logs)
     }
 
-    /// Verify a task belongs to a user. Returns true if it does.
+    /// Verify a task belongs to a user (or default system user). Returns true if it does.
     pub async fn task_belongs_to_user(&self, task_id: Uuid, user_id: Uuid) -> Result<bool> {
+        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         let count = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM agent_tasks WHERE id = $1 AND user_id = $2",
+            "SELECT COUNT(*) FROM agent_tasks WHERE id = $1 AND (user_id = $2 OR user_id = $3)",
         )
         .bind(task_id)
         .bind(user_id)
+        .bind(default_id)
         .fetch_one(&self.pool)
         .await?;
         Ok(count > 0)
@@ -665,14 +675,16 @@ impl Database {
     }
 
     pub async fn count_open_tasks_with_prefix(&self, user_id: Uuid, prefix: &str) -> Result<i64> {
+        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         let pattern = format!("{prefix}%");
         let count = sqlx::query_scalar::<_, i64>(
             r#"SELECT COUNT(*) FROM agent_tasks
-               WHERE user_id = $1 AND title LIKE $2
+               WHERE (user_id = $1 OR user_id = $3) AND title LIKE $2
                AND status NOT IN ('done', 'failed')"#,
         )
         .bind(user_id)
         .bind(&pattern)
+        .bind(default_id)
         .fetch_one(&self.pool)
         .await?;
         Ok(count)
