@@ -6,6 +6,7 @@ target/
 config.yaml
 *.log
 .DS_STORE
+backup.sql
 
 # Docker volumes
 pgdata/

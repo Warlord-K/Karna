@@ -94,10 +94,20 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => warn!(error = %e, "Failed to sync repo profiles"),
     }
 
-    // Spawn the Axum API server (health checks, webhooks)
-    let api_config = config.clone();
-    let api_db = db.clone();
-    let api_handle = tokio::spawn(api::serve(api_config, api_db, api_shutdown_rx));
+    let is_production = std::env::var("ENVIRONMENT")
+        .unwrap_or_default()
+        .eq_ignore_ascii_case("production");
+
+    // Spawn the Axum API server (health checks, webhooks) — skip in production
+    // where the host platform (Render) handles health checks and webhooks go through the API service.
+    let api_handle = if !is_production {
+        let api_config = config.clone();
+        let api_db = db.clone();
+        Some(tokio::spawn(api::serve(api_config, api_db, api_shutdown_rx)))
+    } else {
+        info!("Production mode — skipping agent API server (webhooks via API service)");
+        None
+    };
 
     // Signal handler — runs in background, sets shutdown flag on SIGTERM/SIGINT.
     // The poll loop checks the flag each iteration and drains gracefully.
@@ -185,27 +195,27 @@ async fn main() -> anyhow::Result<()> {
             }
 
             // Check for self-repo updates (after task work is done)
-            if let Some(self_repo) = config.self_repo() {
-                let repo_path = config.repos_dir.join(self_repo.name());
-                match updater::check_self_repo(&repo_path, &self_repo.branch).await {
-                    Ok(Some(change)) => {
-                        info!(change_type = ?change, "Self-repo update detected");
-                        if change.needs_rebuild() {
-                            info!("Code changes detected — initiating graceful shutdown for rebuild");
-                            // Pull self-repo so workspace volume HEAD matches remote.
-                            // Prevents infinite restart loop if Docker restarts the
-                            // container before the host-side wrapper can rebuild.
-                            if let Err(e) = updater::pull_self_repo(&repo_path, &self_repo.branch).await {
-                                warn!(error = %e, "Failed to pull self-repo (restart loop may occur)");
+            // Disabled in production — Render/cloud platforms handle deploys.
+            if !is_production {
+                if let Some(self_repo) = config.self_repo() {
+                    let repo_path = config.repos_dir.join(self_repo.name());
+                    match updater::check_self_repo(&repo_path, &self_repo.branch).await {
+                        Ok(Some(change)) => {
+                            info!(change_type = ?change, "Self-repo update detected");
+                            if change.needs_rebuild() {
+                                info!("Code changes detected — initiating graceful shutdown for rebuild");
+                                if let Err(e) = updater::pull_self_repo(&repo_path, &self_repo.branch).await {
+                                    warn!(error = %e, "Failed to pull self-repo (restart loop may occur)");
+                                }
+                                needs_rebuild = true;
+                                poll_shutdown.store(true, Ordering::SeqCst);
+                            } else {
+                                info!("Config-only changes — will be picked up via hot-reload");
                             }
-                            needs_rebuild = true;
-                            poll_shutdown.store(true, Ordering::SeqCst);
-                        } else {
-                            info!("Config-only changes — will be picked up via hot-reload");
                         }
+                        Ok(None) => {} // No changes
+                        Err(e) => warn!(error = %e, "Self-repo update check failed"),
                     }
-                    Ok(None) => {} // No changes
-                    Err(e) => warn!(error = %e, "Self-repo update check failed"),
                 }
             }
 
@@ -220,18 +230,29 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Wait for poll loop or API server to exit.
-    // Signal handling is async (sets flag → poll loop sees it → breaks → handle completes).
-    tokio::select! {
-        r = api_handle => error!("API server exited unexpectedly: {r:?}"),
-        r = poll_handle => {
-            match r {
-                Ok(true) => {
-                    info!("Exiting with code {EXIT_CODE_UPDATE} for rebuild");
-                    std::process::exit(EXIT_CODE_UPDATE);
+    if let Some(api_handle) = api_handle {
+        tokio::select! {
+            r = api_handle => error!("API server exited unexpectedly: {r:?}"),
+            r = poll_handle => {
+                match r {
+                    Ok(true) => {
+                        info!("Exiting with code {EXIT_CODE_UPDATE} for rebuild");
+                        std::process::exit(EXIT_CODE_UPDATE);
+                    }
+                    Ok(false) => info!("Poller exited cleanly"),
+                    Err(e) => error!("Poller exited: {e:?}"),
                 }
-                Ok(false) => info!("Poller exited cleanly"),
-                Err(e) => error!("Poller exited: {e:?}"),
             }
+        }
+    } else {
+        // Production mode — no API server, just wait for the poll loop
+        match poll_handle.await {
+            Ok(true) => {
+                info!("Exiting with code {EXIT_CODE_UPDATE} for rebuild");
+                std::process::exit(EXIT_CODE_UPDATE);
+            }
+            Ok(false) => info!("Poller exited cleanly"),
+            Err(e) => error!("Poller exited: {e:?}"),
         }
     }
 

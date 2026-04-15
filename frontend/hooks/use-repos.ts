@@ -16,7 +16,7 @@ export const repoKeys = {
 export function useRepos() {
   return useQuery<RepoProfile[]>({
     queryKey: repoKeys.lists(),
-    queryFn: fetchRepos,
+    queryFn: ({ signal }) => fetchRepos(signal),
     refetchInterval: 5000,
   });
 }

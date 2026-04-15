@@ -18,8 +18,8 @@ export interface RepoProfile {
 
 const API_BASE = '/api/repos';
 
-export async function fetchRepos(): Promise<RepoProfile[]> {
-  const res = await fetch(API_BASE);
+export async function fetchRepos(signal?: AbortSignal): Promise<RepoProfile[]> {
+  const res = await fetch(API_BASE, { signal });
   if (!res.ok) throw new Error('Failed to fetch repos');
   return res.json();
 }

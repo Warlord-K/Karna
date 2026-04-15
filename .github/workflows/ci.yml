@@ -11,12 +11,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  agent:
-    name: Agent (Rust)
+  rust:
+    name: Rust (agent + api + shared)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: agent
     steps:
       - uses: actions/checkout@v4
 
@@ -25,17 +22,15 @@ jobs:
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: agent
 
       - name: Check
-        run: cargo check
+        run: cargo check --workspace
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --workspace -- -D warnings
 
       - name: Test
-        run: cargo test
+        run: cargo test --workspace
 
   frontend:
     name: Frontend (Next.js)
@@ -72,9 +67,21 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [agent, frontend, code-server]
+        include:
+          - service: agent
+            context: .
+            dockerfile: agent/Dockerfile
+          - service: api
+            context: .
+            dockerfile: api/Dockerfile
+          - service: frontend
+            context: frontend
+            dockerfile: frontend/Dockerfile
+          - service: code-server
+            context: code-server
+            dockerfile: code-server/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
       - name: Build ${{ matrix.service }}
-        run: docker build ./${{ matrix.service }}
+        run: docker build -f ${{ matrix.dockerfile }} ${{ matrix.context }}

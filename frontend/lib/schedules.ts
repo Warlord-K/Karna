@@ -47,8 +47,8 @@ export interface ScheduledRunLog {
 // API client helpers
 const API_BASE = '/api/schedules';
 
-export async function fetchSchedules(): Promise<Schedule[]> {
-  const res = await fetch(API_BASE);
+export async function fetchSchedules(signal?: AbortSignal): Promise<Schedule[]> {
+  const res = await fetch(API_BASE, { signal });
   if (!res.ok) throw new Error('Failed to fetch schedules');
   return res.json();
 }
@@ -95,14 +95,14 @@ export async function triggerSchedule(id: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to trigger schedule');
 }
 
-export async function fetchRuns(scheduleId: string): Promise<ScheduledRun[]> {
-  const res = await fetch(`${API_BASE}/${scheduleId}/runs`);
+export async function fetchRuns(scheduleId: string, signal?: AbortSignal): Promise<ScheduledRun[]> {
+  const res = await fetch(`${API_BASE}/${scheduleId}/runs`, { signal });
   if (!res.ok) throw new Error('Failed to fetch runs');
   return res.json();
 }
 
-export async function fetchRunLogs(scheduleId: string, runId: string): Promise<ScheduledRunLog[]> {
-  const res = await fetch(`${API_BASE}/${scheduleId}/runs/${runId}/logs`);
+export async function fetchRunLogs(scheduleId: string, runId: string, signal?: AbortSignal): Promise<ScheduledRunLog[]> {
+  const res = await fetch(`${API_BASE}/${scheduleId}/runs/${runId}/logs`, { signal });
   if (!res.ok) throw new Error('Failed to fetch run logs');
   return res.json();
 }

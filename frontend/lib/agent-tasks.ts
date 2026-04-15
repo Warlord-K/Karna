@@ -78,8 +78,8 @@ export function getColumnForStatus(status: AgentTaskStatus): AgentColumn {
 // API client helpers
 const API_BASE = '/api/tasks';
 
-export async function fetchTasks(): Promise<AgentTask[]> {
-  const res = await fetch(API_BASE);
+export async function fetchTasks(signal?: AbortSignal): Promise<AgentTask[]> {
+  const res = await fetch(API_BASE, { signal });
   if (!res.ok) throw new Error('Failed to fetch tasks');
   return res.json();
 }
@@ -115,8 +115,8 @@ export async function deleteTask(id: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to delete task');
 }
 
-export async function fetchLogs(taskId: string): Promise<AgentLog[]> {
-  const res = await fetch(`${API_BASE}/${taskId}/logs`);
+export async function fetchLogs(taskId: string, signal?: AbortSignal): Promise<AgentLog[]> {
+  const res = await fetch(`${API_BASE}/${taskId}/logs`, { signal });
   if (!res.ok) throw new Error('Failed to fetch logs');
   return res.json();
 }
@@ -131,8 +131,8 @@ export async function postComment(taskId: string, message: string): Promise<Agen
   return res.json();
 }
 
-export async function fetchSubtasks(taskId: string): Promise<AgentTask[]> {
-  const res = await fetch(`${API_BASE}/${taskId}/subtasks`);
+export async function fetchSubtasks(taskId: string, signal?: AbortSignal): Promise<AgentTask[]> {
+  const res = await fetch(`${API_BASE}/${taskId}/subtasks`, { signal });
   if (!res.ok) throw new Error('Failed to fetch subtasks');
   return res.json();
 }

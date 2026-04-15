@@ -1,0 +1,49 @@
+name: Migrate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'migrations/**'
+
+  # Manual trigger from Actions tab
+  workflow_dispatch:
+
+concurrency:
+  group: migrate
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Run Migrations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run unapplied migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_DIRECT }}
+        run: |
+          # Ensure tracking table exists
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+              version TEXT PRIMARY KEY,
+              applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+          "
+
+          # Apply each unapplied migration in order
+          for f in migrations/[0-9]*.sql; do
+            version=$(basename "$f")
+            already=$(psql "$DATABASE_URL" -tAc "SELECT 1 FROM schema_migrations WHERE version = '$version'")
+            if [ "$already" = "1" ]; then
+              echo "skip: $version"
+            else
+              echo "applying: $version"
+              psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+              psql "$DATABASE_URL" -c "INSERT INTO schema_migrations (version) VALUES ('$version')"
+              echo "applied: $version"
+            fi
+          done
+
+          echo "migrations complete"

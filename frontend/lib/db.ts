@@ -1,15 +1,20 @@
 import { Pool } from "pg";
 
-let _pool: Pool | null = null;
+// Use globalThis to survive Next.js module re-instantiation in standalone mode.
+// Without this, multiple Pool instances can be created across different bundles,
+// each holding connections against Postgres.
+const globalForPg = globalThis as unknown as { _pgPool?: Pool };
 
 export function getPool(): Pool {
-  if (!_pool) {
-    _pool = new Pool({
+  if (!globalForPg._pgPool) {
+    globalForPg._pgPool = new Pool({
       connectionString: process.env.DATABASE_URL,
-      max: 20,
+      max: 10,
+      connectionTimeoutMillis: 5000,
+      idleTimeoutMillis: 30000,
     });
   }
-  return _pool;
+  return globalForPg._pgPool;
 }
 
 // Backwards-compat: eager pool for existing imports

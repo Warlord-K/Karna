@@ -51,8 +51,8 @@ export function useConfig(enabled: boolean) {
 export function useTasks(enabled: boolean) {
   return useQuery<AgentTask[]>({
     queryKey: taskKeys.lists(),
-    queryFn: async () => {
-      const data = await fetchTasks();
+    queryFn: async ({ signal }) => {
+      const data = await fetchTasks(signal);
       return nestSubtasks(data);
     },
     enabled,
@@ -63,7 +63,7 @@ export function useTasks(enabled: boolean) {
 export function useSubtasks(taskId: string | null, poll: boolean) {
   return useQuery<AgentTask[]>({
     queryKey: taskKeys.subtasks(taskId!),
-    queryFn: () => fetchSubtasks(taskId!),
+    queryFn: ({ signal }) => fetchSubtasks(taskId!, signal),
     enabled: !!taskId,
     refetchInterval: poll ? 5000 : false,
   });
@@ -72,7 +72,7 @@ export function useSubtasks(taskId: string | null, poll: boolean) {
 export function useLogs(taskId: string | null, poll: boolean) {
   return useQuery<AgentLog[]>({
     queryKey: taskKeys.logs(taskId!),
-    queryFn: () => fetchLogs(taskId!),
+    queryFn: ({ signal }) => fetchLogs(taskId!, signal),
     enabled: !!taskId && poll,
     refetchInterval: poll ? 3000 : false,
   });

@@ -1,15 +1,28 @@
 # Build Rust binary
 FROM rust:1.88-slim-bookworm AS builder
-WORKDIR /app
+WORKDIR /build
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+
+# Copy workspace manifests for dependency caching
 COPY Cargo.toml Cargo.lock* ./
-# Create dummy main for dependency caching
-RUN mkdir src && echo "fn main() {}" > src/main.rs
-RUN cargo build --release 2>/dev/null || true
-# Now copy real source and build
-COPY src ./src
-COPY templates ./templates
-RUN touch src/main.rs && cargo build --release
+COPY shared/Cargo.toml shared/Cargo.toml
+COPY agent/Cargo.toml agent/Cargo.toml
+COPY api/Cargo.toml api/Cargo.toml
+
+# Stubs for dependency caching
+RUN mkdir -p shared/src agent/src api/src \
+    && echo "pub mod db; pub mod models;" > shared/src/lib.rs \
+    && echo "pub fn stub() {}" > shared/src/db.rs \
+    && echo "" > shared/src/models.rs \
+    && echo "fn main() {}" > agent/src/main.rs \
+    && echo "fn main() {}" > api/src/main.rs
+RUN cargo build --release -p karna-agent 2>/dev/null || true
+
+# Copy real source and build
+COPY shared/src shared/src
+COPY agent/src agent/src
+COPY agent/templates agent/templates
+RUN touch agent/src/main.rs && cargo build --release -p karna-agent
 
 # Runtime image
 FROM debian:bookworm-slim
@@ -39,8 +52,8 @@ RUN git config --global safe.directory "*"
 RUN useradd -m -s /bin/bash agent
 
 WORKDIR /app
-COPY --from=builder /app/target/release/karna-agent ./
-COPY templates ./templates
+COPY --from=builder /build/target/release/karna-agent ./
+COPY agent/templates ./templates
 
 # Create workspace dirs, keyring dir, codex config dir, and .ssh dir owned by agent user
 RUN mkdir -p /workspace /workspace/.workspaces /home/agent/.local/share/keyrings /home/agent/.codex /home/agent/.ssh \

@@ -38,8 +38,34 @@ services:
       interval: 5s
       retries: 5
 
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    environment:
+      DATABASE_URL: postgres://karna:${POSTGRES_PASSWORD:-karna}@postgres:5432/karna
+      REDIS_URL: redis://redis:6379
+      AUTH_SECRET: ${AUTH_SECRET}
+      AUTH_DISABLED: ${AUTH_DISABLED:-}
+      CONFIG_PATH: /etc/karna/config.yaml
+      PORT: "8081"
+    volumes:
+      - ./config.yaml:/etc/karna/config.yaml:ro
+    ports:
+      - "${API_PORT:-8081}:8081"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/health"]
+      interval: 5s
+      retries: 5
+    restart: unless-stopped
+
   agent:
-    build: ./agent
+    build:
+      context: .
+      dockerfile: agent/Dockerfile
     env_file: .env
     environment:
       DATABASE_URL: postgres://karna:${POSTGRES_PASSWORD:-karna}@postgres:5432/karna
@@ -76,20 +102,20 @@ services:
       SIGNUP_DISABLED: ${SIGNUP_DISABLED:-}
       AUTH_TRUST_HOST: "true"
       AUTH_URL: ${TUNNEL_FRONTEND_HOSTNAME:+https://${TUNNEL_FRONTEND_HOSTNAME}}
-      CONFIG_PATH: /etc/karna/config.yaml
-      REDIS_URL: redis://redis:6379
-    volumes:
-      - ./config.yaml:/etc/karna/config.yaml:ro
+      API_URL: http://api:8081
+      NODE_OPTIONS: "--max-old-space-size=384"
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     depends_on:
-      migrate: { condition: service_completed_successfully }
+      api: { condition: service_healthy }
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/',r=>{r.resume();process.exit(0)}).on('error',()=>process.exit(1))"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/',r=>{r.resume();process.exit(r.statusCode<500?0:1)}).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
       retries: 3
-      start_period: 40s
+      start_period: 30s
+    mem_limit: 512m
+    memswap_limit: 512m
     restart: unless-stopped
 
   code-server:

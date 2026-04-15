@@ -5,31 +5,48 @@ Create tasks on a kanban board, an AI agent plans and implements them, opens PRs
 ## Architecture
 
 ```
+Cargo workspace: agent/, api/, shared/
+
 docker-compose.yml
 ├── postgres:16     — Auth.js sessions + agent_tasks + agent_logs
 ├── redis:7         — Task queue + distributed locks
+├── api (Rust/Axum) — REST API, all CRUD + JWT auth, serves frontend data
 ├── agent (Rust)    — Polls DB, invokes Claude Code or Codex CLI, git/gh operations
-├── frontend (Next.js) — Kanban board UI, Auth.js + email/password credentials
+├── frontend (Next.js) — Kanban board UI, Auth.js login only, proxies /api to Rust API
 ├── code-server     — Browser IDE with dev tooling (git, gh, claude, codex) + config-driven extensions
 ├── tunnel          — Optional Cloudflare Tunnel for public access
 └── autoheal        — Auto-restarts unhealthy containers
 ```
 
+### Crate structure
+- **shared/** (`karna-shared`) — Database client (sqlx) + domain models (AgentTask, Schedule, RepoProfile, etc.)
+- **api/** (`karna-api`) — Axum REST server, NextAuth JWE decryption, CORS, all data endpoints
+- **agent/** (`karna-agent`) — Task orchestration, CLI backends, git operations, scheduler, webhooks
+
 ## Tech Stack
 
 ### Frontend (`frontend/`)
 - **Framework**: Next.js 15 (App Router), React 19, TypeScript
-- **Auth**: Auth.js v5 + email/password credentials + @auth/pg-adapter (Postgres sessions)
+- **Auth**: Auth.js v5 + email/password credentials + @auth/pg-adapter (login/signup only)
 - **Styling**: Tailwind CSS 3 + shadcn/ui
 - **DnD**: @dnd-kit/core + @dnd-kit/sortable
 - **Animations**: Framer Motion
-- **State**: Client-side fetch + 5s polling (no WebSocket/Realtime)
+- **State**: TanStack Query + 5s polling with AbortSignal
+- **Data**: All `/api/*` requests (except auth) proxied to Rust API via Next.js rewrites — no direct DB access
+
+### API (`api/`)
+- **Language**: Rust (2021 edition)
+- **Runtime**: Tokio
+- **HTTP**: Axum + tower-http (CORS)
+- **DB**: karna-shared (sqlx Postgres)
+- **Auth**: NextAuth v5 JWE decryption (HKDF-SHA256 + A256CBC-HS512)
+- **Queue**: Redis (schedule triggers)
 
 ### Agent Backend (`agent/`)
-- **Language**: Rust (2024 edition)
+- **Language**: Rust (2021 edition)
 - **Runtime**: Tokio
 - **HTTP**: Axum (health + webhooks)
-- **DB**: sqlx (Postgres)
+- **DB**: karna-shared (sqlx Postgres)
 - **Queue**: Redis (distributed locks with NX + EX)
 - **AI**: Pluggable CLI backends — Claude Code or OpenAI Codex (spawned as subprocess, configured via `agent.cli`)
 - **Git**: git + gh CLI
@@ -64,6 +81,25 @@ karna/
 │   ├── 009_schedules.sql        # schedules + scheduled_runs + scheduled_run_logs
 │   ├── 010_repo_profiles.sql    # Repo profiles for auto-discovery + smart planning
 │   └── 011_cancelled_status.sql # Cancelled task status
+├── Cargo.toml                   # Workspace root (members: agent, api, shared)
+├── shared/
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs               # Re-exports db + models
+│       ├── db.rs                # Database client (sqlx) — all CRUD queries
+│       └── models.rs            # Domain models: AgentTask, Schedule, RepoProfile, etc.
+├── api/
+│   ├── Cargo.toml
+│   ├── Dockerfile
+│   └── src/
+│       ├── main.rs              # Axum server, router, CORS, state
+│       ├── auth.rs              # NextAuth v5 JWE decryption (HKDF + A256CBC-HS512)
+│       ├── config.rs            # Reads config.yaml for repos/backends/skills
+│       └── routes/
+│           ├── tasks.rs         # CRUD, logs, comments, subtasks
+│           ├── schedules.rs     # CRUD, trigger, runs, run logs
+│           ├── repos.rs         # List, add, delete, onboard
+│           └── config.rs        # Config endpoint
 ├── agent/
 │   ├── Cargo.toml
 │   ├── Dockerfile
@@ -78,6 +114,7 @@ karna/
 ├── frontend/
 │   ├── Dockerfile
 │   ├── package.json
+│   ├── next.config.mjs          # Rewrites /api/* (except auth) to Rust API
 │   ├── auth.ts                  # Auth.js config (credentials provider + pg adapter)
 │   ├── middleware.ts             # Route protection
 │   ├── app/
@@ -85,30 +122,10 @@ karna/
 │   │   ├── globals.css          # Tailwind + CSS variables (dark theme)
 │   │   ├── page.tsx             # Kanban board (6 columns, DnD, polling)
 │   │   ├── login/page.tsx       # Email/password login + signup
-│   │   └── api/
-│   │       ├── auth/[...nextauth]/route.ts  # Auth.js handler
-│   │       ├── tasks/
-│   │       │   ├── route.ts     # GET (list), POST (create — repo optional)
-│   │       │   └── [id]/
-│   │       │       ├── route.ts      # PATCH (update), DELETE
-│   │       │       ├── logs/route.ts # GET logs
-│   │       │       └── subtasks/route.ts # GET (list), POST (create from plan)
-│   │       ├── schedules/
-│   │       │   ├── route.ts     # GET (list), POST (create schedule)
-│   │       │   └── [id]/
-│   │       │       ├── route.ts      # GET, PATCH (update), DELETE
-│   │       │       ├── trigger/route.ts # POST (manual trigger via Redis)
-│   │       │       └── runs/
-│   │       │           ├── route.ts  # GET (list runs)
-│   │       │           └── [runId]/logs/route.ts # GET (run logs)
-│   │       └── repos/
-│   │           ├── route.ts     # GET (list), POST (add repo)
-│   │           └── [id]/
-│   │               ├── route.ts      # DELETE
-│   │               └── onboard/route.ts # POST (trigger re-onboarding)
+│   │   └── api/auth/            # Auth.js routes only — all other /api proxied to Rust API
 │   ├── lib/
-│   │   ├── db.ts                # pg Pool
-│   │   ├── agent-tasks.ts       # Types + API client helpers
+│   │   ├── db.ts                # pg Pool (auth only)
+│   │   ├── agent-tasks.ts       # Types + API client helpers (with AbortSignal)
 │   │   ├── schedules.ts         # Schedule types + API client + cron helpers
 │   │   ├── repos.ts             # Repo profile types + API client helpers
 │   │   └── utils.ts             # cn() utility
@@ -226,29 +243,41 @@ subtasks -->
 
 ## API Routes
 
+All data routes are served by the Rust API (`api/`). The frontend proxies `/api/*` (except auth) via Next.js rewrites.
+
+**Rust API (karna-api, :8081):**
+
 | Method | Path | Purpose |
 |--------|------|---------|
+| GET | /health | Health check |
 | GET | /api/tasks | List all tasks for current user |
 | POST | /api/tasks | Create new task (repo optional for multi-repo) |
-| PATCH | /api/tasks/[id] | Update task fields |
-| DELETE | /api/tasks/[id] | Delete task |
-| GET | /api/tasks/[id]/logs | Get agent logs for task |
-| POST | /api/tasks/[id]/comments | Post a comment (creates log entry + sets feedback for agent) |
-| GET | /api/tasks/[id]/subtasks | List subtasks for a parent task |
-| POST | /api/tasks/[id]/subtasks | Parse plan & create subtasks (plan approval) |
-| GET/POST | /api/auth/* | Auth.js handlers |
+| PATCH | /api/tasks/{id} | Update task fields |
+| DELETE | /api/tasks/{id} | Delete task |
+| GET | /api/tasks/{id}/logs | Get agent logs for task (capped at 200) |
+| POST | /api/tasks/{id}/comments | Post a comment (creates log entry + sets feedback for agent) |
+| GET | /api/tasks/{id}/subtasks | List subtasks for a parent task |
+| POST | /api/tasks/{id}/subtasks | Parse plan & create subtasks (plan approval) |
 | GET | /api/schedules | List all schedules for current user (with last run) |
 | POST | /api/schedules | Create new schedule (cron or one-shot) |
-| GET | /api/schedules/[id] | Get single schedule |
-| PATCH | /api/schedules/[id] | Update schedule fields (name, prompt, enabled, etc.) |
-| DELETE | /api/schedules/[id] | Delete schedule (cascades to runs + logs) |
-| POST | /api/schedules/[id]/trigger | Manual trigger (sets Redis key for immediate pickup) |
-| GET | /api/schedules/[id]/runs | List runs for a schedule |
-| GET | /api/schedules/[id]/runs/[runId]/logs | Get logs for a specific run |
-| GET | /api/repos | List all repo profiles for current user |
+| GET | /api/schedules/{id} | Get single schedule |
+| PATCH | /api/schedules/{id} | Update schedule fields (name, prompt, enabled, etc.) |
+| DELETE | /api/schedules/{id} | Delete schedule (cascades to runs + logs) |
+| POST | /api/schedules/{id}/trigger | Manual trigger (sets Redis key for immediate pickup) |
+| GET | /api/schedules/{id}/runs | List runs for a schedule |
+| GET | /api/schedules/{id}/runs/{runId}/logs | Get logs for a specific run (capped at 200) |
+| GET | /api/repos | List all repo profiles |
 | POST | /api/repos | Add new repo (triggers onboarding) |
-| DELETE | /api/repos/[id] | Delete repo profile |
-| POST | /api/repos/[id]/onboard | Trigger re-onboarding for a repo |
+| DELETE | /api/repos/{id} | Delete repo profile |
+| POST | /api/repos/{id}/onboard | Trigger re-onboarding for a repo |
+| GET | /api/config | Config (repos, backends, skills, MCP servers) |
+
+**Frontend (Next.js, :3000) — auth only:**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET/POST | /api/auth/* | Auth.js handlers (login, session, CSRF) |
+| POST | /api/auth/signup | User registration |
 
 ## Frontend Components
 

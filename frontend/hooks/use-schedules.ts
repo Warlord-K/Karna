@@ -24,7 +24,7 @@ export const scheduleKeys = {
 export function useSchedules() {
   return useQuery<Schedule[]>({
     queryKey: scheduleKeys.lists(),
-    queryFn: fetchSchedules,
+    queryFn: ({ signal }) => fetchSchedules(signal),
     refetchInterval: 10_000,
   });
 }
@@ -32,7 +32,7 @@ export function useSchedules() {
 export function useScheduleRuns(scheduleId: string | null, poll: boolean) {
   return useQuery<ScheduledRun[]>({
     queryKey: scheduleKeys.runs(scheduleId!),
-    queryFn: () => fetchRuns(scheduleId!),
+    queryFn: ({ signal }) => fetchRuns(scheduleId!, signal),
     enabled: !!scheduleId,
     refetchInterval: poll ? 5000 : false,
   });
@@ -45,7 +45,7 @@ export function useScheduleRunLogs(
 ) {
   return useQuery<ScheduledRunLog[]>({
     queryKey: scheduleKeys.runLogs(scheduleId!, runId!),
-    queryFn: () => fetchRunLogs(scheduleId!, runId!),
+    queryFn: ({ signal }) => fetchRunLogs(scheduleId!, runId!, signal),
     enabled: !!scheduleId && !!runId,
     refetchInterval: poll ? 3000 : false,
   });

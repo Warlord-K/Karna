@@ -4,7 +4,7 @@
 
 <h1 align="center">Karna</h1>
 
-<p align="center">Self-hosted autonomous coding agent. Create tasks on a kanban board, an AI agent plans and implements them, opens PRs on GitHub, and notifies you via email.</p>
+<p align="center">Agent for programmers who like to touch grass. Create tasks on a kanban board, an AI agent plans and implements them, opens PRs on GitHub, and notifies you via email.</p>
 
 ```
 You create a task → Agent writes a plan → You review → Agent implements → Opens PR → You merge
@@ -107,7 +107,8 @@ Tasks can use either **Claude Code** or **OpenAI Codex** as the AI backend. Pick
 | Port | Service | Purpose |
 |------|---------|---------|
 | [localhost:3000](http://localhost:3000) | Frontend | Kanban board + task management |
-| [localhost:8080](http://localhost:8080) | Agent API | Webhooks + health check |
+| [localhost:8081](http://localhost:8081) | API | REST API (Rust/Axum) — all data operations |
+| [localhost:8080](http://localhost:8080) | Agent | Webhooks + health check |
 | [localhost:8443](http://localhost:8443) | code-server | Browser IDE — watch the agent work live |
 
 ## Scaling
@@ -374,20 +375,148 @@ psql "$REMOTE_DATABASE_URL" < backup.sql
 # Infrastructure only
 docker compose up -d postgres redis
 
-# Frontend (hot reload)
+# API (serves all REST endpoints)
+export DATABASE_URL="postgres://karna:karna@localhost:5432/karna"
+export REDIS_URL="redis://localhost:6379"
+export AUTH_DISABLED=true
+export CONFIG_PATH="../config.yaml"
+cargo run -p karna-api
+
+# Frontend (hot reload) — proxies /api/* to the API
 cd frontend && npm install && npm run setup && npm run dev
 
 # Agent
-cd agent
 export DATABASE_URL="postgres://karna:karna@localhost:5432/karna"
 export REDIS_URL="redis://localhost:6379"
 export CONFIG_PATH="../config.yaml"
 export REPOS_DIR="$HOME/karna-repos"
 export WORKSPACES_DIR="$HOME/karna-workspaces"
-cargo run
+cargo run -p karna-agent
 ```
 
 CI runs on all PRs: `cargo check` + `cargo clippy` for the agent, `npm run build` for the frontend, and Docker build verification.
+
+## Cloud Deployment
+
+Karna can be split across managed services for production use. Each component runs where it fits best:
+
+```
+Vercel (Frontend)  ──rewrite──▶  Render (API)  ──▶  Supabase (Postgres)
+                                     ↕                       ↑
+                                Redis Cloud             Render (Agent)
+                                     ↑───────────────────────/
+```
+
+| Component | Service | Why |
+|-----------|---------|-----|
+| Postgres | [Supabase](https://supabase.com) | Managed Postgres, free tier, dashboard |
+| Redis | [Redis Cloud](https://redis.io/cloud) | Managed Redis, free 30MB tier |
+| API | [Render](https://render.com) Web Service | Rust binary, fast cold starts, auto-deploy from Docker |
+| Agent | [Render](https://render.com) Background Worker | Docker container, scales by adding workers |
+| Frontend | [Vercel](https://vercel.com) | Next.js native, zero-config, edge rewrites |
+
+### 1. Supabase (Postgres)
+
+Create a new Supabase project and run the migrations:
+
+```bash
+# Concatenate all migrations in order
+cat migrations/001_initial.sql \
+    migrations/002_add_password.sql \
+    migrations/003_subtasks.sql \
+    migrations/004_cli_model.sql \
+    migrations/005_task_number.sql \
+    migrations/006_log_type_tool.sql \
+    migrations/007_cost_usd.sql \
+    migrations/008_comment_log_type.sql \
+    migrations/009_schedules.sql \
+    migrations/010_repo_profiles.sql \
+    migrations/011_cancelled_status.sql \
+  | psql "$SUPABASE_DATABASE_URL"
+```
+
+Save your connection string — you'll use it for both the API and agent.
+
+### 2. Redis Cloud
+
+Create a free Redis Cloud instance at [redis.io/cloud](https://redis.io/cloud). Copy the connection URL (format: `redis://default:password@host:port`).
+
+### 3. Render — API Service
+
+Create a **Web Service** on Render:
+
+- **Root Directory**: `.` (repo root)
+- **Dockerfile Path**: `api/Dockerfile`
+- **Environment variables**:
+
+| Variable | Value |
+|----------|-------|
+| `DATABASE_URL` | Your Supabase connection string |
+| `REDIS_URL` | Your Redis Cloud URL |
+| `AUTH_SECRET` | Same value as your frontend (generate with `openssl rand -hex 32`) |
+| `AUTH_DISABLED` | `true` for single-user, omit for auth |
+| `CONFIG_PATH` | `/etc/karna/config.yaml` (mount your config, or omit for defaults) |
+| `PORT` | `8081` |
+
+The API exposes `/health` for Render's health checks.
+
+### 4. Render — Agent Worker(s)
+
+Create a **Background Worker** on Render:
+
+- **Root Directory**: `.` (repo root)
+- **Dockerfile Path**: `agent/Dockerfile`
+- **Environment variables**:
+
+| Variable | Value |
+|----------|-------|
+| `DATABASE_URL` | Your Supabase connection string |
+| `REDIS_URL` | Your Redis Cloud URL |
+| `GITHUB_TOKEN` | GitHub PAT with `repo` + `workflow` scopes |
+| `CLAUDE_CODE_OAUTH_TOKEN` | From `claude setup-token` |
+| `CONFIG_PATH` | `/etc/karna/config.yaml` |
+| `REPOS_DIR` | `/workspace` |
+| `WORKSPACES_DIR` | `/workspace/.workspaces` |
+| `GIT_AUTHOR_NAME` | `Karna Agent` |
+| `GIT_AUTHOR_EMAIL` | `agent@karna.dev` |
+
+**Scaling:** Each background worker is an independent agent. They coordinate via Redis locks — add more workers to process tasks in parallel. No config changes needed.
+
+**Webhooks:** Set `AGENT_WEBHOOK_URL` to the agent's Render URL if you want real-time GitHub PR feedback. Otherwise, use the Activity tab in the UI.
+
+### 5. Vercel (Frontend)
+
+Import the repo on Vercel:
+
+- **Root Directory**: `frontend`
+- **Framework Preset**: Next.js
+- **Environment variables**:
+
+| Variable | Value |
+|----------|-------|
+| `DATABASE_URL` | Your Supabase connection string (needed for NextAuth login/signup only) |
+| `AUTH_SECRET` | Same value as the API service |
+| `API_URL` | Your Render API URL (e.g. `https://karna-api.onrender.com`) |
+| `AUTH_DISABLED` | `true` for single-user, omit for auth |
+
+The frontend proxies all `/api/*` requests (except auth) to the Rust API via Next.js rewrites. No CORS configuration needed.
+
+### Verify
+
+1. Open your Vercel URL — you should see the login page (or the board if `AUTH_DISABLED=true`)
+2. Create a task — it should appear on the board
+3. Watch the agent worker logs on Render — it should pick up the task within 30 seconds
+4. The agent plans, implements, and opens a PR on GitHub
+
+### Cost Estimate (free tiers)
+
+| Service | Tier | Limit |
+|---------|------|-------|
+| Supabase | Free | 500MB database, 2 projects |
+| Redis Cloud | Free | 30MB, 1 database |
+| Render API | Free | 750 hours/month, spins down on idle |
+| Render Agent | Starter ($7/mo) | Background workers need a paid plan |
+| Vercel | Hobby | 100GB bandwidth, unlimited deploys |
 
 ## Architecture
 
@@ -395,12 +524,15 @@ CI runs on all PRs: `cargo check` + `cargo clippy` for the agent, `npm run build
 docker-compose.yml
 ├── postgres:16       — Auth sessions + tasks + logs
 ├── redis:7           — Task queue + distributed locks
+├── api (Rust/Axum)   — REST API, serves all data to the frontend
 ├── agent (Rust)      — Polls DB, invokes Claude Code or Codex CLI, git/gh operations
-├── frontend (Next.js)— Kanban board, Auth.js with credentials auth
+├── frontend (Next.js)— Kanban board, Auth.js with credentials auth, proxies /api to Rust API
 ├── code-server       — Browser IDE to watch agent edit files
 ├── tunnel            — Optional Cloudflare Tunnel for public access
 └── autoheal          — Auto-restarts unhealthy containers
 ```
+
+The API and agent share a `karna-shared` Rust crate (database client + domain models). The frontend contains no database queries — it proxies all data requests to the Rust API via Next.js rewrites.
 
 **Tech stack:** Rust (Tokio, Axum, sqlx, redis) · Next.js 15, React 19, Auth.js v5, Tailwind, dnd-kit, Framer Motion · PostgreSQL 16 · Redis 7 · Claude Code CLI + OpenAI Codex CLI
 
