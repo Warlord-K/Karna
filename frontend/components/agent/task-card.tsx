@@ -53,7 +53,10 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
           style={{ borderColor: status.color, backgroundColor: task.status === 'done' ? status.color : 'transparent' }}
         />
         <div className="flex-1 min-w-0">
-          <p className={`text-[14px] font-medium leading-[1.45] line-clamp-2 tracking-[-0.01em] ${task.status === 'cancelled' ? 'text-gray-8 line-through' : 'text-gray-12'}`}>
+          <p
+            title={`KAR-${task.task_number} ${task.title}`}
+            className={`text-[14px] font-medium leading-[1.45] line-clamp-2 tracking-[-0.01em] ${task.status === 'cancelled' ? 'text-gray-8 line-through' : 'text-gray-12'}`}
+          >
             <span className="text-gray-7 font-mono text-[12px] mr-1.5">KAR-{task.task_number}</span>
             {task.title}
           </p>

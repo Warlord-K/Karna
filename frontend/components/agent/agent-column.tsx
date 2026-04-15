@@ -18,7 +18,7 @@ export function AgentColumn({ column, tasks, onTaskClick, onCreateTask }: AgentC
   const config = COLUMN_CONFIG[column];
 
   return (
-    <div className="flex flex-col h-full w-[85vw] sm:w-[300px] md:w-[340px] min-w-[85vw] sm:min-w-[300px] md:min-w-[340px] snap-start">
+    <div className="flex flex-col h-full w-[85vw] sm:w-[300px] md:w-[340px] min-w-[85vw] sm:min-w-[300px] md:min-w-[340px] sm:flex-1 snap-start">
       {/* Column header */}
       <div className="flex items-center justify-between h-11 px-3 sm:px-5 flex-shrink-0">
         <div className="flex items-center gap-2.5">
