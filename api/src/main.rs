@@ -1,7 +1,9 @@
 use std::net::SocketAddr;
+use std::time::Duration;
 
+use axum::http::{self, Method};
 use axum::{middleware, routing::{delete, get, patch, post}, Router};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tracing::info;
 
 mod auth;
@@ -37,16 +39,35 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .expect("PORT must be a number");
 
+    let frontend_url = std::env::var("FRONTEND_URL")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let frontend_url = frontend_url.trim_end_matches('/').to_string();
+
     let db = karna_shared::db::Database::connect(&database_url).await?;
     let redis = redis::Client::open(redis_url)?;
     let config = config::load()?;
 
     let state = AppState { db, redis, config };
 
+    let origin = frontend_url
+        .parse::<http::HeaderValue>()
+        .expect("FRONTEND_URL must be a valid header value");
+
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin(origin)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
+        .allow_headers([
+            http::header::CONTENT_TYPE,
+            http::header::AUTHORIZATION,
+        ])
+        .allow_credentials(true)
+        .max_age(Duration::from_secs(3600));
 
     let api = Router::new()
         // Tasks
