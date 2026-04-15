@@ -232,7 +232,11 @@ Description: {description}
     let working_dir = if worktree_path.exists() {
         &worktree_path
     } else {
+        // Re-clone if the repo was lost (ephemeral disk on Render, container restart, etc.)
         let repo_path = config.repos_dir.join(repo_name);
+        if !repo_path.exists() {
+            workspace::ensure_cloned(&config.repos_dir, &repo_ref, &config.github_token).await?;
+        }
         let base_branch = config
             .find_repo(&repo_ref)
             .map(|r| r.branch.as_str())
