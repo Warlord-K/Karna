@@ -79,25 +79,25 @@ pub async fn github_webhook(
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        if review_state == "changes_requested" {
+        if review_state == "changes_requested" || review_state == "commented" {
             let review_body = payload
                 .pointer("/review/body")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
 
-            info!(task_id = %task.id, branch, "Webhook: changes requested");
             if !review_body.is_empty() {
+                info!(task_id = %task.id, branch, review_state, "Webhook: review feedback received");
                 let _ = state.db.set_feedback(task.id, &review_body).await;
+                let _ = state
+                    .db
+                    .update_status(task.id, TaskStatus::InProgress.as_str())
+                    .await;
+                let _ = state
+                    .db
+                    .insert_log(task.id, "webhook", &format!("PR review ({review_state}): feedback received"), "info", None)
+                    .await;
             }
-            let _ = state
-                .db
-                .update_status(task.id, TaskStatus::InProgress.as_str())
-                .await;
-            let _ = state
-                .db
-                .insert_log(task.id, "webhook", "Changes requested via PR review", "info", None)
-                .await;
             return StatusCode::OK;
         }
 
