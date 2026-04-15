@@ -27,3 +27,4 @@ anyhow = "1"
 dotenvy = "0.15"
 indexmap = { version = "2", features = ["serde"] }
 regex-lite = "0.1"
+urlencoding = "2"
