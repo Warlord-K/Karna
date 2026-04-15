@@ -22,6 +22,7 @@ import {
 } from '@phosphor-icons/react';
 import toast from 'react-hot-toast';
 import { MarkdownEditor } from './markdown-editor';
+import { TaskAttachments } from './task-attachments';
 import { formatDistanceToNow, format } from 'date-fns';
 
 type Tab = 'details' | 'plan' | 'subtasks' | 'activity';
@@ -230,6 +231,11 @@ export function TaskDetailModal({ task, onClose, onUpdate, onDelete }: TaskDetai
                   placeholder="Add a description..."
                 />
               </div>
+
+              <TaskAttachments
+                taskId={task.id}
+                editable={['todo', 'plan_review', 'planning'].includes(task.status)}
+              />
 
               {task.error_message && (
                 <div className="flex items-start gap-3 p-4 rounded-lg bg-red-500/8 border border-red-500/15">

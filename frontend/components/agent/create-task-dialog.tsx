@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { AgentTaskPriority } from '@/lib/agent-tasks';
-import { X, Stack } from '@phosphor-icons/react';
+import { X, Stack, ImageSquare } from '@phosphor-icons/react';
+import { ImageDropZone } from './task-attachments';
 
 export interface BackendConfig {
   models: string[];
@@ -21,8 +22,12 @@ interface CreateTaskDialogProps {
     priority: AgentTaskPriority;
     cli: string | null;
     model: string | null;
-  }) => Promise<void>;
+  }, images: File[]) => Promise<void>;
 }
+
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const MAX_IMAGES = 10;
 
 const PRIORITIES: { value: AgentTaskPriority; label: string; color: string }[] = [
   { value: 'urgent', label: 'Urgent', color: '#e5484d' },
@@ -43,6 +48,32 @@ export function CreateTaskDialog({ open, onClose, repos, backends, onCreateTask 
   const [cli, setCli] = useState(defaultCli);
   const [model, setModel] = useState(defaultModel);
   const [loading, setLoading] = useState(false);
+  const [images, setImages] = useState<File[]>([]);
+
+  const addImages = useCallback((files: File[]) => {
+    const valid = files.filter(f => {
+      if (!ALLOWED_IMAGE_TYPES.includes(f.type)) return false;
+      if (f.size > MAX_FILE_SIZE) return false;
+      return true;
+    });
+    setImages(prev => [...prev, ...valid].slice(0, MAX_IMAGES));
+  }, []);
+
+  const removeImage = useCallback((index: number) => {
+    setImages(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const items = Array.from(e.clipboardData.items);
+    const imageFiles = items
+      .filter(item => item.type.startsWith('image/'))
+      .map(item => item.getAsFile())
+      .filter(Boolean) as File[];
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      addImages(imageFiles);
+    }
+  }, [addImages]);
 
   useEffect(() => {
     const backend = backends[cli];
@@ -60,8 +91,8 @@ export function CreateTaskDialog({ open, onClose, repos, backends, onCreateTask 
     if (!title.trim()) return;
     setLoading(true);
     try {
-      await onCreateTask({ title: title.trim(), description: description.trim(), repo: repo || null, priority, cli, model });
-      setTitle(''); setDescription(''); setRepo(''); setPriority('medium'); setCli(defaultCli); setModel(defaultModel);
+      await onCreateTask({ title: title.trim(), description: description.trim(), repo: repo || null, priority, cli, model }, images);
+      setTitle(''); setDescription(''); setRepo(''); setPriority('medium'); setCli(defaultCli); setModel(defaultModel); setImages([]);
       onClose();
     } catch (error) { console.error(error); } finally { setLoading(false); }
   };
@@ -101,9 +132,16 @@ export function CreateTaskDialog({ open, onClose, repos, backends, onCreateTask 
               placeholder="Requirements, context, acceptance criteria..."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
+              onPaste={handlePaste}
               rows={3}
               className="w-full px-3 py-2.5 text-[16px] sm:text-[14px] rounded-lg bg-gray-2 border border-gray-4 text-gray-11 placeholder:text-gray-7 focus:outline-none focus:border-gray-6 font-mono"
             />
+            <ImageDropZone images={images} onAdd={addImages} onRemove={removeImage} />
+            {images.length === 0 && (
+              <p className="text-[11px] text-gray-7 mt-1.5 flex items-center gap-1">
+                <ImageSquare size={11} weight="bold" /> Paste or drag images here
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

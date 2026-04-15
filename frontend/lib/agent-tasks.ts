@@ -2,6 +2,15 @@
 export type AgentTaskStatus = 'todo' | 'planning' | 'plan_review' | 'in_progress' | 'review' | 'done' | 'failed' | 'cancelled';
 export type AgentTaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 
+export interface TaskAttachment {
+  id: string;
+  task_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+}
+
 export interface AgentTask {
   id: string;
   user_id: string;
@@ -205,4 +214,55 @@ export function getTasksForColumn(tasks: AgentTask[], column: AgentColumn, inclu
     if (!includeSubtasks && t.parent_task_id) return false;
     return statuses.includes(t.status);
   });
+}
+
+// --- Attachment API helpers ---
+
+export async function fetchAttachments(taskId: string): Promise<TaskAttachment[]> {
+  const res = await fetch(`${API_BASE}/${taskId}/attachments`);
+  if (!res.ok) throw new Error('Failed to fetch attachments');
+  return res.json();
+}
+
+export async function uploadAttachment(taskId: string, file: File): Promise<TaskAttachment> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch(`${API_BASE}/${taskId}/attachments`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to upload attachment');
+  }
+  return res.json();
+}
+
+export async function deleteAttachment(taskId: string, attachmentId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/${taskId}/attachments/${attachmentId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Failed to delete attachment');
+}
+
+export function getAttachmentUrl(taskId: string, attachmentId: string): string {
+  return `${API_BASE}/${taskId}/attachments/${attachmentId}/file`;
+}
+
+export async function createTaskWithImages(
+  data: {
+    title: string;
+    description: string;
+    repo: string | null;
+    priority: AgentTaskPriority;
+    cli: string | null;
+    model: string | null;
+  },
+  images: File[],
+): Promise<AgentTask> {
+  const task = await createTask(data);
+  if (images.length > 0) {
+    await Promise.all(images.map(f => uploadAttachment(task.id, f)));
+  }
+  return task;
 }

@@ -244,6 +244,11 @@ pub async fn create_subtasks(
         created.push(sub);
     }
 
+    // Copy parent task attachments to each subtask
+    for sub in &created {
+        let _ = state.db.copy_task_attachments(id, sub.id).await;
+    }
+
     // Move parent to in_progress
     let _ = state.db.update_status(id, "in_progress").await;
 

@@ -13,7 +13,8 @@ import {
   AgentTaskPriority,
   AgentTaskStatus,
 } from '@/lib/agent-tasks';
-import { useTasks, useConfig, useCreateTask } from '@/hooks/use-tasks';
+import { useTasks, useConfig } from '@/hooks/use-tasks';
+import { createTaskWithImages } from '@/lib/agent-tasks';
 import { AgentColumn } from '@/components/agent/agent-column';
 import { CreateTaskDialog, BackendConfig } from '@/components/agent/create-task-dialog';
 import { Plus, ArrowsClockwise } from '@phosphor-icons/react';
@@ -36,7 +37,6 @@ export default function BoardPage() {
   const queryClient = useQueryClient();
   const { data: tasks = [] } = useTasks(isReady);
   const { data: config } = useConfig(isReady);
-  const createTaskMutation = useCreateTask();
 
   const repos = config?.repos ?? [];
   const backends = config?.backends ?? {};
@@ -59,8 +59,10 @@ export default function BoardPage() {
     priority: AgentTaskPriority;
     cli: string | null;
     model: string | null;
-  }) => {
-    await createTaskMutation.mutateAsync(data);
+  }, images: File[] = []) => {
+    await createTaskWithImages(data, images);
+    queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
+    toast.success('Task created');
   };
 
   const handleDragStart = (event: DragStartEvent) => {
