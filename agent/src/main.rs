@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 mod agent;
 mod api;
@@ -98,16 +98,27 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_default()
         .eq_ignore_ascii_case("production");
 
-    // Spawn the Axum API server (health checks, webhooks) — skip in production
-    // where the host platform (Render) handles health checks and webhooks go through the API service.
-    let api_handle = if !is_production {
-        let api_config = config.clone();
-        let api_db = db.clone();
-        Some(tokio::spawn(api::serve(api_config, api_db, api_shutdown_rx)))
-    } else {
-        info!("Production mode — skipping agent API server (webhooks via API service)");
-        None
-    };
+    // Spawn the Axum API server (health checks, webhooks)
+    let api_config = config.clone();
+    let api_db = db.clone();
+    let api_handle = tokio::spawn(api::serve(api_config, api_db, api_shutdown_rx));
+
+    // In production on Render free tier, self-ping to prevent spin-down.
+    // Render sets RENDER_EXTERNAL_URL automatically on web services.
+    if let Ok(external_url) = std::env::var("RENDER_EXTERNAL_URL") {
+        let url = format!("{external_url}/health");
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            loop {
+                tokio::time::sleep(Duration::from_secs(240)).await; // 4 minutes
+                match client.get(&url).send().await {
+                    Ok(_) => debug!("Keep-alive ping sent"),
+                    Err(e) => warn!(error = %e, "Keep-alive ping failed"),
+                }
+            }
+        });
+        info!("Keep-alive pinger started (4min interval → {external_url}/health)");
+    }
 
     // Signal handler — runs in background, sets shutdown flag on SIGTERM/SIGINT.
     // The poll loop checks the flag each iteration and drains gracefully.
@@ -230,29 +241,17 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Wait for poll loop or API server to exit.
-    if let Some(api_handle) = api_handle {
-        tokio::select! {
-            r = api_handle => error!("API server exited unexpectedly: {r:?}"),
-            r = poll_handle => {
-                match r {
-                    Ok(true) => {
-                        info!("Exiting with code {EXIT_CODE_UPDATE} for rebuild");
-                        std::process::exit(EXIT_CODE_UPDATE);
-                    }
-                    Ok(false) => info!("Poller exited cleanly"),
-                    Err(e) => error!("Poller exited: {e:?}"),
+    tokio::select! {
+        r = api_handle => error!("API server exited unexpectedly: {r:?}"),
+        r = poll_handle => {
+            match r {
+                Ok(true) => {
+                    info!("Exiting with code {EXIT_CODE_UPDATE} for rebuild");
+                    std::process::exit(EXIT_CODE_UPDATE);
                 }
+                Ok(false) => info!("Poller exited cleanly"),
+                Err(e) => error!("Poller exited: {e:?}"),
             }
-        }
-    } else {
-        // Production mode — no API server, just wait for the poll loop
-        match poll_handle.await {
-            Ok(true) => {
-                info!("Exiting with code {EXIT_CODE_UPDATE} for rebuild");
-                std::process::exit(EXIT_CODE_UPDATE);
-            }
-            Ok(false) => info!("Poller exited cleanly"),
-            Err(e) => error!("Poller exited: {e:?}"),
         }
     }
 

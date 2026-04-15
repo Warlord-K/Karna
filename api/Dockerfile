@@ -1,35 +1,32 @@
-# Build stage
+# syntax=docker/dockerfile:1
 FROM rust:1.88-slim-bookworm AS builder
 WORKDIR /build
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 
-# Copy workspace manifests for dependency caching
-COPY Cargo.toml Cargo.lock* ./
-COPY shared/Cargo.toml shared/Cargo.toml
-COPY api/Cargo.toml api/Cargo.toml
+# Copy full workspace source
+COPY Cargo.toml Cargo.lock ./
+COPY shared/ shared/
+COPY api/ api/
+
+# Agent stub (workspace member must exist but we don't need its real source)
 COPY agent/Cargo.toml agent/Cargo.toml
+RUN mkdir -p agent/src && echo "fn main() {}" > agent/src/main.rs
 
-# Stubs for dependency caching
-RUN mkdir -p shared/src api/src agent/src \
-    && echo "pub mod db; pub mod models;" > shared/src/lib.rs \
-    && echo "pub fn stub() {}" > shared/src/db.rs \
-    && echo "" > shared/src/models.rs \
-    && echo "fn main() {}" > api/src/main.rs \
-    && echo "fn main() {}" > agent/src/main.rs
-RUN cargo build --release -p karna-api 2>/dev/null || true
+# Build with cache mounts — persists cargo registry + target dir across builds.
+# Even if Docker layer cache misses, compiled deps survive.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target \
+    cargo build --release -p karna-api \
+    && cp target/release/karna-api /karna-api
 
-# Copy real source
-COPY shared/src shared/src
-COPY api/src api/src
-RUN touch api/src/main.rs && cargo build --release -p karna-api
-
-# Runtime — minimal image, no heavy deps needed
+# Runtime
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY --from=builder /build/target/release/karna-api ./
+COPY --from=builder /karna-api ./karna-api
 
 ENV RUST_LOG=info
 EXPOSE 8081

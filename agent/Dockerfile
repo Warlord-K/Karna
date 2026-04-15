@@ -1,28 +1,23 @@
-# Build Rust binary
+# syntax=docker/dockerfile:1
 FROM rust:1.88-slim-bookworm AS builder
 WORKDIR /build
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 
-# Copy workspace manifests for dependency caching
-COPY Cargo.toml Cargo.lock* ./
-COPY shared/Cargo.toml shared/Cargo.toml
-COPY agent/Cargo.toml agent/Cargo.toml
+# Copy full workspace source
+COPY Cargo.toml Cargo.lock ./
+COPY shared/ shared/
+COPY agent/ agent/
+
+# API stub (workspace member must exist but we don't need its real source)
 COPY api/Cargo.toml api/Cargo.toml
+RUN mkdir -p api/src && echo "fn main() {}" > api/src/main.rs
 
-# Stubs for dependency caching
-RUN mkdir -p shared/src agent/src api/src \
-    && echo "pub mod db; pub mod models;" > shared/src/lib.rs \
-    && echo "pub fn stub() {}" > shared/src/db.rs \
-    && echo "" > shared/src/models.rs \
-    && echo "fn main() {}" > agent/src/main.rs \
-    && echo "fn main() {}" > api/src/main.rs
-RUN cargo build --release -p karna-agent 2>/dev/null || true
-
-# Copy real source and build
-COPY shared/src shared/src
-COPY agent/src agent/src
-COPY agent/templates agent/templates
-RUN touch agent/src/main.rs && cargo build --release -p karna-agent
+# Build with cache mounts — persists cargo registry + target dir across builds.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target \
+    cargo build --release -p karna-agent \
+    && cp target/release/karna-agent /karna-agent
 
 # Runtime image
 FROM debian:bookworm-slim
@@ -52,7 +47,7 @@ RUN git config --global safe.directory "*"
 RUN useradd -m -s /bin/bash agent
 
 WORKDIR /app
-COPY --from=builder /build/target/release/karna-agent ./
+COPY --from=builder /karna-agent ./karna-agent
 COPY agent/templates ./templates
 
 # Create workspace dirs, keyring dir, codex config dir, and .ssh dir owned by agent user
