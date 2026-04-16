@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use axum::{middleware, routing::{delete, get, patch, post}, Router};
 use tower_http::cors::{Any, CorsLayer};
-use tracing::info;
+use tracing::{info, warn};
 
 mod auth;
 mod config;
@@ -42,6 +42,10 @@ async fn main() -> anyhow::Result<()> {
     let config = config::load()?;
 
     let state = AppState { db, redis, config };
+
+    if std::env::var("GITHUB_WEBHOOK_SECRET").is_err() {
+        warn!("GITHUB_WEBHOOK_SECRET not set — all incoming webhooks will be rejected. Set this env var to enable webhook processing.");
+    }
 
     let cors = CorsLayer::new()
         .allow_origin(Any)

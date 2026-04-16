@@ -42,6 +42,10 @@ async fn main() -> anyhow::Result<()> {
         "Karna Agent starting",
     );
 
+    if config.github_webhook_secret.is_none() {
+        warn!("GITHUB_WEBHOOK_SECRET not set — all incoming webhooks will be rejected. Set this env var to enable webhook processing.");
+    }
+
     // Graceful shutdown — flag + notify for instant wake from sleep
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_notify = Arc::new(tokio::sync::Notify::new());
