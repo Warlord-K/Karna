@@ -19,7 +19,7 @@ pub async fn get(
             seen.insert(r.repo.clone());
             json!({
                 "repo": r.repo,
-                "name": r.repo.split('/').last().unwrap_or(&r.repo),
+                "name": r.repo.split('/').next_back().unwrap_or(&r.repo),
                 "branch": r.branch,
             })
         })
@@ -31,7 +31,7 @@ pub async fn get(
             if seen.insert(p.repo.clone()) {
                 repos.push(json!({
                     "repo": p.repo,
-                    "name": p.repo.split('/').last().unwrap_or(&p.repo),
+                    "name": p.repo.split('/').next_back().unwrap_or(&p.repo),
                     "branch": p.branch,
                 }));
             }
