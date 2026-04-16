@@ -29,18 +29,25 @@ impl TaskStatus {
             Self::Cancelled => "cancelled",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Option<Self> {
+#[derive(Debug)]
+pub struct ParseTaskStatusError;
+
+impl std::str::FromStr for TaskStatus {
+    type Err = ParseTaskStatusError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "todo" => Some(Self::Todo),
-            "planning" => Some(Self::Planning),
-            "plan_review" => Some(Self::PlanReview),
-            "in_progress" => Some(Self::InProgress),
-            "review" => Some(Self::Review),
-            "done" => Some(Self::Done),
-            "failed" => Some(Self::Failed),
-            "cancelled" => Some(Self::Cancelled),
-            _ => None,
+            "todo" => Ok(Self::Todo),
+            "planning" => Ok(Self::Planning),
+            "plan_review" => Ok(Self::PlanReview),
+            "in_progress" => Ok(Self::InProgress),
+            "review" => Ok(Self::Review),
+            "done" => Ok(Self::Done),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            _ => Err(ParseTaskStatusError),
         }
     }
 }
@@ -99,7 +106,7 @@ pub struct AgentTask {
 
 impl AgentTask {
     pub fn status_enum(&self) -> Option<TaskStatus> {
-        TaskStatus::from_str(&self.status)
+        self.status.parse::<TaskStatus>().ok()
     }
 
     pub fn target_branch_or_default(&self) -> &str {

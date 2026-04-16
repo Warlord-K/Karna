@@ -308,6 +308,7 @@ impl Database {
 
     // --- Subtask queries ---
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_subtask(
         &self,
         parent_id: Uuid,
