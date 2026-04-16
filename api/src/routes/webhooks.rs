@@ -41,8 +41,8 @@ pub async fn github_webhook(
 
     // Only handle agent branches ({prefix}-{number}/slug format)
     // Skip branches that don't match the pattern (e.g., "main", "feature/foo")
-    if !branch.contains('/') || !branch.split('/').next().map_or(false, |p| {
-        p.rfind('-').map_or(false, |i| p[i + 1..].chars().all(|c| c.is_ascii_digit()) && i > 0)
+    if !branch.contains('/') || !branch.split('/').next().is_some_and(|p| {
+        p.rfind('-').is_some_and(|i| p[i + 1..].chars().all(|c| c.is_ascii_digit()) && i > 0)
     }) {
         return StatusCode::OK;
     }
