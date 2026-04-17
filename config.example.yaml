@@ -6,6 +6,7 @@ repos:
   # Add your repositories here:
   - repo: you/my-app
     branch: main
+    sync_issues: true    # Auto-create tasks from new GitHub issues (default: true)
 
   # Enable self-iteration — the agent can modify its own config, skills, and code.
   # Code changes trigger a rebuild; config/skill changes hot-reload automatically.
@@ -13,6 +14,7 @@ repos:
   # - repo: you/karna-fork
   #   branch: main
   #   self: true
+  #   sync_issues: false   # Disable issue sync for the self-repo
 
 agent:
   max_turns: 100                   # Max CLI turns per invocation (Claude only, ignored by Codex)
