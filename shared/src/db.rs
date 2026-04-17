@@ -842,6 +842,37 @@ impl Database {
         Ok(())
     }
 
+    pub async fn find_task_by_github_issue(&self, repo: &str, issue_number: i32) -> Result<Option<AgentTask>> {
+        let pattern = format!("GH-{}: %", issue_number);
+        let task = sqlx::query_as::<_, AgentTask>(
+            "SELECT * FROM agent_tasks WHERE repo = $1 AND title LIKE $2 LIMIT 1",
+        )
+        .bind(repo)
+        .bind(&pattern)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(task)
+    }
+
+    pub async fn get_repo_sync_issues(&self, repo: &str) -> Result<bool> {
+        let result = sqlx::query_scalar::<_, bool>(
+            "SELECT sync_issues FROM repo_profiles WHERE repo = $1",
+        )
+        .bind(repo)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(result.unwrap_or(true))
+    }
+
+    pub async fn update_repo_sync_issues(&self, id: Uuid, sync_issues: bool) -> Result<()> {
+        sqlx::query("UPDATE repo_profiles SET sync_issues = $1 WHERE id = $2")
+            .bind(sync_issues)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn delete_repo_profile(&self, id: Uuid) -> Result<()> {
         sqlx::query("DELETE FROM repo_profiles WHERE id = $1")
             .bind(id)
