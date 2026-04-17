@@ -34,6 +34,16 @@ pub async fn github_webhook(
     };
 
     let action = payload["action"].as_str().unwrap_or("");
+
+    // Handle GitHub issue opened → create task
+    let event = headers
+        .get("x-github-event")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if event == "issues" && action == "opened" {
+        return handle_issue_opened(&state, &payload).await;
+    }
+
     let branch = payload
         .pointer("/pull_request/head/ref")
         .and_then(|v| v.as_str())
@@ -138,6 +148,68 @@ pub async fn github_webhook(
     }
 
     StatusCode::OK
+}
+
+async fn handle_issue_opened(state: &AppState, payload: &serde_json::Value) -> StatusCode {
+    let repo_name = match payload.pointer("/repository/full_name").and_then(|v| v.as_str()) {
+        Some(r) => r,
+        None => return StatusCode::OK,
+    };
+
+    let sync_enabled = match state.db.get_repo_sync_issues(repo_name).await {
+        Ok(enabled) => enabled,
+        Err(_) => return StatusCode::OK,
+    };
+    if !sync_enabled {
+        info!(repo = repo_name, "Issue sync disabled for repo, skipping");
+        return StatusCode::OK;
+    }
+
+    let issue_number = payload.pointer("/issue/number").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let issue_title = payload.pointer("/issue/title").and_then(|v| v.as_str()).unwrap_or("Untitled");
+    let issue_body = payload.pointer("/issue/body").and_then(|v| v.as_str()).unwrap_or("");
+    let issue_url = payload.pointer("/issue/html_url").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Deduplicate: check if a task already exists for this issue
+    match state.db.find_task_by_github_issue(repo_name, issue_number).await {
+        Ok(Some(_)) => {
+            info!(repo = repo_name, issue_number, "Task already exists for issue, skipping");
+            return StatusCode::OK;
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to check issue deduplication");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+        Ok(None) => {}
+    }
+
+    let user_id = match state.db.first_user_id().await {
+        Ok(Some(id)) => id,
+        _ => {
+            warn!("No user found to assign issue task");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
+    let title = format!("GH-{}: {}", issue_number, issue_title);
+    let body_truncated = if issue_body.len() > 10_000 { &issue_body[..10_000] } else { issue_body };
+    let description = if issue_url.is_empty() {
+        body_truncated.to_string()
+    } else {
+        format!("{}\n\n---\n_Opened from: {}_", body_truncated, issue_url)
+    };
+
+    match state.db.create_task(user_id, &title, Some(&description), Some(repo_name), "medium", None, None).await {
+        Ok(task) => {
+            info!(task_id = %task.id, repo = repo_name, issue_number, "Created task from GitHub issue");
+            let _ = state.db.insert_log(task.id, "webhook", &format!("Task created from GitHub issue #{issue_number}"), "info", None).await;
+            StatusCode::OK
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to create task from issue");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
 }
 
 fn verify_signature(secret: Option<&str>, signature_header: Option<&str>, body: &[u8]) -> bool {
