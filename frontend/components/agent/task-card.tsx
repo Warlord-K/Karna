@@ -1,6 +1,6 @@
 'use client';
 
-import { AgentTask, PRIORITY_COLORS } from '@/lib/agent-tasks';
+import { AgentTask, PRIORITY_COLORS, getTaskLabel, getTaskTitle } from '@/lib/agent-tasks';
 import { GitPullRequest, WarningCircle, Lightning, Stack, Clock } from '@phosphor-icons/react';
 import { formatDistanceToNow } from 'date-fns';
 import { useSortable } from '@dnd-kit/sortable';
@@ -54,11 +54,11 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
         />
         <div className="flex-1 min-w-0">
           <p
-            title={`KAR-${task.task_number} ${task.title}`}
+            title={`${getTaskLabel(task)} ${getTaskTitle(task)}`}
             className={`text-[14px] font-medium leading-[1.45] line-clamp-2 tracking-[-0.01em] ${task.status === 'cancelled' ? 'text-gray-8 line-through' : 'text-gray-12'}`}
           >
-            <span className="text-gray-7 font-mono text-[12px] mr-1.5">KAR-{task.task_number}</span>
-            {task.title}
+            <span className="text-gray-7 font-mono text-[12px] mr-1.5">{getTaskLabel(task)}</span>
+            {getTaskTitle(task)}
           </p>
         </div>
       </div>
