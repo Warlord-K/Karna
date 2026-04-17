@@ -23,7 +23,10 @@ pub async fn sync_repo_profiles(config: &Config, db: &Database) -> Result<()> {
         let existing = db.get_repo_profile(&repo_config.repo).await?;
         if existing.is_none() {
             info!(repo = %repo_config.repo, "Creating repo profile for config repo");
-            db.upsert_repo_profile(user_id, &repo_config.repo, &repo_config.branch).await?;
+            let profile = db.upsert_repo_profile(user_id, &repo_config.repo, &repo_config.branch).await?;
+            db.update_repo_sync_issues(profile.id, repo_config.sync_issues).await?;
+        } else if let Some(profile) = existing {
+            db.update_repo_sync_issues(profile.id, repo_config.sync_issues).await?;
         }
     }
 

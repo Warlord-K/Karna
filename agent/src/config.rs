@@ -107,6 +107,13 @@ pub struct RepoConfig {
     /// rebuilds (code changes) or hot-reloads (config/skill changes).
     #[serde(default, rename = "self")]
     pub is_self: bool,
+    /// Auto-create kanban tasks from new GitHub issues (default: true).
+    #[serde(default = "default_true")]
+    pub sync_issues: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl RepoConfig {
