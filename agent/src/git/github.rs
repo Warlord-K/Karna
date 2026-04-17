@@ -181,6 +181,7 @@ pub async fn ensure_repo_webhook(
         "-f".to_string(), "events[]=pull_request_review".to_string(),
         "-f".to_string(), "events[]=issue_comment".to_string(),
         "-f".to_string(), "events[]=pull_request".to_string(),
+        "-f".to_string(), "events[]=issues".to_string(),
     ];
     if let Some(s) = secret {
         args.push("-f".to_string());
