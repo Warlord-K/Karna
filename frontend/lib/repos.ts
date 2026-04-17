@@ -12,6 +12,7 @@ export interface RepoProfile {
   last_commit_sha: string | null;
   error_message: string | null;
   cost_usd: number;
+  sync_issues: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -42,6 +43,16 @@ export async function deleteRepo(id: string): Promise<void> {
 export async function triggerOnboard(id: string): Promise<void> {
   const res = await fetch(`${API_BASE}/${id}/onboard`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to trigger onboarding');
+}
+
+export async function updateRepo(id: string, data: { sync_issues?: boolean }): Promise<RepoProfile> {
+  const res = await fetch(`${API_BASE}/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error('Failed to update repo');
+  return res.json();
 }
 
 export const REPO_STATUS_COLORS: Record<RepoProfileStatus, string> = {

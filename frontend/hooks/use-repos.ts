@@ -5,6 +5,7 @@ import {
   addRepo,
   deleteRepo,
   triggerOnboard,
+  updateRepo,
 } from '@/lib/repos';
 import toast from 'react-hot-toast';
 
@@ -52,6 +53,32 @@ export function useDeleteRepo() {
     onError: (_err, _vars, ctx) => {
       if (ctx?.prev) qc.setQueryData(repoKeys.lists(), ctx.prev);
       toast.error('Failed to remove repo');
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: repoKeys.lists() }),
+  });
+}
+
+export function useUpdateRepo() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: { sync_issues?: boolean } }) =>
+      updateRepo(id, data),
+    onMutate: async ({ id, data }) => {
+      await qc.cancelQueries({ queryKey: repoKeys.lists() });
+      const prev = qc.getQueryData<RepoProfile[]>(repoKeys.lists());
+      if (prev) {
+        qc.setQueryData<RepoProfile[]>(
+          repoKeys.lists(),
+          prev.map(r =>
+            r.id === id ? { ...r, ...data } : r
+          )
+        );
+      }
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(repoKeys.lists(), ctx.prev);
+      toast.error('Failed to update repo');
     },
     onSettled: () => qc.invalidateQueries({ queryKey: repoKeys.lists() }),
   });
