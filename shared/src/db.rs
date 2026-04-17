@@ -681,7 +681,7 @@ impl Database {
         let count = sqlx::query_scalar::<_, i64>(
             r#"SELECT COUNT(*) FROM agent_tasks
                WHERE (user_id = $1 OR user_id = $3) AND title LIKE $2
-               AND status NOT IN ('done', 'failed')"#,
+               AND status NOT IN ('done', 'failed', 'cancelled')"#,
         )
         .bind(user_id)
         .bind(&pattern)
@@ -689,6 +689,33 @@ impl Database {
         .fetch_one(&self.pool)
         .await?;
         Ok(count)
+    }
+
+    pub async fn max_prefix_number(&self, user_id: Uuid, prefix: &str) -> Result<i32> {
+        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
+        let pattern = format!("{prefix}-%");
+        let titles: Vec<String> = sqlx::query_scalar(
+            r#"SELECT title FROM agent_tasks
+               WHERE (user_id = $1 OR user_id = $3) AND title LIKE $2"#,
+        )
+        .bind(user_id)
+        .bind(&pattern)
+        .bind(default_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let prefix_dash = format!("{prefix}-");
+        let max_num = titles
+            .iter()
+            .filter_map(|title| {
+                let after = title.strip_prefix(&prefix_dash)?;
+                let num_str = after.split(|c: char| !c.is_ascii_digit()).next()?;
+                num_str.parse::<i32>().ok()
+            })
+            .max()
+            .unwrap_or(0);
+
+        Ok(max_num)
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -249,10 +249,13 @@ async fn execute_schedule_inner(
         repos_to_use.join(", ")
     };
 
+    let next_number = db.max_prefix_number(schedule.user_id, prefix).await.unwrap_or(0) + 1;
+
     let mut prompt = include_str!("../templates/schedule_prompt.txt").to_string();
     prompt = prompt.replace("{name}", &schedule.name);
     prompt = prompt.replace("{repos}", &repos_display);
     prompt = prompt.replace("{prompt}", &schedule.prompt);
+    prompt = prompt.replace("{start_number}", &format!("{:03}", next_number));
     prompt = prompt.replace("{prefix}", prefix);
 
     // Inject skills: global + schedule-requested + repo-discovered
@@ -317,11 +320,12 @@ async fn execute_schedule_inner(
             tasks_to_create.len()
         };
 
-        for task_def in tasks_to_create.iter().take(remaining_slots) {
+        for (i, task_def) in tasks_to_create.iter().take(remaining_slots).enumerate() {
+            let corrected_title = normalize_prefix_title(&task_def.title, prefix, next_number + i as i32);
             let task = db
                 .create_task_from_schedule(
                     schedule.user_id,
-                    &task_def.title,
+                    &corrected_title,
                     Some(&task_def.description),
                     if task_def.repo.is_empty() {
                         None
@@ -337,13 +341,13 @@ async fn execute_schedule_inner(
             info!(
                 schedule = %schedule.name,
                 task_id = %task.id,
-                title = %task_def.title,
+                title = %corrected_title,
                 "Created task from schedule"
             );
             db.insert_run_log(
                 run.id,
                 "info",
-                &format!("Created task: {} ({})", task_def.title, task.id),
+                &format!("Created task: {} ({})", corrected_title, task.id),
             )
             .await?;
 
@@ -454,4 +458,20 @@ fn parse_tasks_from_output(output: &str) -> Vec<TaskDirective> {
             })
         })
         .collect()
+}
+
+/// Normalize a task title to ensure the embedded prefix number is correct.
+/// If the LLM generated "FEA-001: ..." but the correct number should be 004,
+/// replace the number portion while keeping the rest of the title.
+fn normalize_prefix_title(title: &str, prefix: &str, expected_number: i32) -> String {
+    let prefix_dash = format!("{prefix}-");
+    if let Some(rest) = title.strip_prefix(&prefix_dash) {
+        if let Some(colon_pos) = rest.find(':') {
+            let num_part = &rest[..colon_pos];
+            if num_part.chars().all(|c| c.is_ascii_digit()) && !num_part.is_empty() {
+                return format!("{prefix}-{:03}:{}", expected_number, &rest[colon_pos + 1..]);
+            }
+        }
+    }
+    title.to_string()
 }

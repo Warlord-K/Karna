@@ -77,6 +77,19 @@ export const PRIORITY_COLORS: Record<AgentTaskPriority, string> = {
   low: '#82807a',
 };
 
+export function getTaskLabel(task: AgentTask): string {
+  const match = task.title.match(/^([A-Za-z][\w]*)-(\d+)\s*:/);
+  if (match) {
+    return `${match[1].toUpperCase()}-${match[2]}`;
+  }
+  return `KAR-${task.task_number}`;
+}
+
+export function getTaskTitle(task: AgentTask): string {
+  const match = task.title.match(/^[A-Za-z][\w]*-\d+\s*:\s*(.*)/);
+  return match ? match[1] : task.title;
+}
+
 export function getColumnForStatus(status: AgentTaskStatus): AgentColumn {
   for (const [col, config] of Object.entries(COLUMN_CONFIG)) {
     if (config.statuses.includes(status)) return col as AgentColumn;

@@ -8,6 +8,8 @@ import {
   AgentTaskPriority,
   AgentTaskStatus,
   hasSubtaskDefinitions,
+  getTaskLabel,
+  getTaskTitle,
 } from '@/lib/agent-tasks';
 import {
   useTasks,
@@ -179,7 +181,7 @@ export default function TaskDetailPage() {
             >
               <ArrowLeft size={16} weight="bold" />
             </button>
-            <span className="text-xs text-gray-11 font-mono font-medium flex-shrink-0">KAR-{task.task_number}</span>
+            <span className="text-xs text-gray-11 font-mono font-medium flex-shrink-0">{getTaskLabel(task)}</span>
             <span className="text-gray-5 hidden sm:inline">/</span>
             {repoName ? (
               <span className="text-xs text-gray-9 font-mono hidden sm:inline">{repoName}</span>
@@ -510,8 +512,8 @@ function SubtaskRow({ task }: { task: AgentTask }) {
           className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${(task.status === 'planning' || task.status === 'in_progress') ? 'animate-pulse' : ''}`}
           style={{ backgroundColor: color }}
         />
-        <span className="text-xs text-gray-7 font-mono flex-shrink-0">KAR-{task.task_number}</span>
-        <span className="text-[14px] text-gray-12 truncate flex-1">{task.title}</span>
+        <span className="text-xs text-gray-7 font-mono flex-shrink-0">{getTaskLabel(task)}</span>
+        <span className="text-[14px] text-gray-12 truncate flex-1">{getTaskTitle(task)}</span>
       </div>
       <div className="flex items-center gap-2 sm:gap-3 ml-[18px] sm:ml-0 flex-shrink-0">
         <span className="text-xs text-gray-8 font-mono">{repoName}</span>
