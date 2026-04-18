@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use axum::{middleware, routing::{delete, get, patch, post}, Router};
+use axum::{middleware, routing::{get, patch, post}, Router};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
