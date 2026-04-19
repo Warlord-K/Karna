@@ -10,13 +10,10 @@ import {
   AGENT_COLUMNS,
   getTasksForColumn,
   getColumnForStatus,
-  AgentTaskPriority,
   AgentTaskStatus,
 } from '@/lib/agent-tasks';
-import { useTasks, useConfig } from '@/hooks/use-tasks';
-import { createTaskWithImages } from '@/lib/agent-tasks';
+import { useTasks } from '@/hooks/use-tasks';
 import { AgentColumn } from '@/components/agent/agent-column';
-import { CreateTaskDialog, BackendConfig } from '@/components/agent/create-task-dialog';
 import { Plus, ArrowsClockwise } from '@phosphor-icons/react';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
 import toast from 'react-hot-toast';
@@ -30,16 +27,11 @@ export default function BoardPage() {
   const isReady = authDisabled || authStatus === 'authenticated';
   const router = useRouter();
 
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const queryClient = useQueryClient();
   const { data: tasks = [] } = useTasks(isReady);
-  const { data: config } = useConfig(isReady);
-
-  const repos = config?.repos ?? [];
-  const backends = config?.backends ?? {};
 
   const sensors = useSensors(
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
@@ -50,19 +42,6 @@ export default function BoardPage() {
     setRefreshing(true);
     await queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
     setTimeout(() => setRefreshing(false), 500);
-  };
-
-  const handleCreateTask = async (data: {
-    title: string;
-    description: string;
-    repo: string | null;
-    priority: AgentTaskPriority;
-    cli: string | null;
-    model: string | null;
-  }, images: File[] = []) => {
-    await createTaskWithImages(data, images);
-    queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
-    toast.success('Task created');
   };
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -109,6 +88,10 @@ export default function BoardPage() {
     router.push(`/tasks/${task.id}`);
   };
 
+  const handleNewTask = () => {
+    router.push('/tasks/new');
+  };
+
   const activeTask = activeId ? tasks.find(t => t.id === activeId) : null;
 
   return (
@@ -122,8 +105,8 @@ export default function BoardPage() {
           <ArrowsClockwise size={16} weight="bold" className={refreshing ? 'animate-spin' : ''} />
         </button>
         <button
-          onClick={() => setCreateDialogOpen(true)}
-          className="h-8 w-8 sm:w-auto sm:px-3.5 text-[13px] font-medium text-white bg-sun-9 hover:bg-sun-10 text-gray-1 rounded-lg transition-colors flex items-center justify-center gap-1.5"
+          onClick={handleNewTask}
+          className="h-8 w-8 sm:w-auto sm:px-3.5 text-[13px] font-medium text-white bg-sun-9 hover:bg-sun-10 hover:shadow-[0_0_16px_hsl(40_90%_56%/0.25)] text-gray-1 rounded-lg transition-all duration-200 flex items-center justify-center gap-1.5"
         >
           <Plus size={15} weight="bold" />
           <span className="hidden sm:inline">New Task</span>
@@ -143,28 +126,20 @@ export default function BoardPage() {
                 column={column}
                 tasks={getTasksForColumn(tasks, column)}
                 onTaskClick={handleTaskClick}
-                onCreateTask={column === 'todo' ? () => setCreateDialogOpen(true) : undefined}
+                onCreateTask={column === 'todo' ? handleNewTask : undefined}
               />
             ))}
           </div>
 
           <DragOverlay>
             {activeTask && (
-              <div className="bg-gray-2 rounded-lg p-4 shadow-elevated w-[280px] sm:w-[320px]">
+              <div className="bg-gray-2 rounded-lg p-4 shadow-elevated w-[280px] sm:w-[320px] border border-sun-9/20 ring-1 ring-sun-9/10">
                 <span className="text-[14px] font-medium text-gray-12">{activeTask.title}</span>
               </div>
             )}
           </DragOverlay>
         </DndContext>
       </div>
-
-      <CreateTaskDialog
-        open={createDialogOpen}
-        onClose={() => setCreateDialogOpen(false)}
-        repos={repos}
-        backends={backends}
-        onCreateTask={handleCreateTask}
-      />
     </div>
   );
 }

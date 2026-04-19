@@ -44,7 +44,7 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
       {...attributes}
       {...listeners}
       onClick={onClick}
-      className="group px-3 sm:px-4 py-3 rounded-lg cursor-pointer hover:bg-gray-2 hover:shadow-card active:bg-gray-3 transition-all duration-100"
+      className="group card-hover-glow px-3 sm:px-4 py-3 rounded-lg cursor-pointer border border-transparent hover:bg-gray-2 hover:shadow-card-glow hover:border-gray-4/60 active:bg-gray-3 transition-all duration-150 animate-card-enter"
     >
       {/* Status + title */}
       <div className="flex items-start gap-2.5">
@@ -100,7 +100,7 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
         {task.pr_url && <GitPullRequest size={14} weight="bold" className="text-gray-8 flex-shrink-0" />}
         {task.status === 'failed' && <WarningCircle size={14} weight="fill" className="text-red-400 flex-shrink-0" />}
         {(task.status === 'planning' || task.status === 'in_progress') && !hasSubtasks && (
-          <Lightning size={14} weight="fill" className="text-sun-9 flex-shrink-0" />
+          <Lightning size={14} weight="fill" className="text-sun-9 flex-shrink-0 animate-lightning" />
         )}
       </div>
 

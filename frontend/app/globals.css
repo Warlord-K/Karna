@@ -79,6 +79,148 @@
   }
 }
 
+/* Decorative golden background geometry */
+.board-bg-decoration {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.board-bg-decoration::before,
+.board-bg-decoration::after {
+  content: '';
+  position: absolute;
+  bottom: -80px;
+  width: 500px;
+  height: 500px;
+  opacity: 0.07;
+  background: radial-gradient(ellipse at center, hsl(40 90% 56%), transparent 70%);
+  filter: blur(60px);
+  animation: glow-drift 12s ease-in-out infinite;
+}
+
+.board-bg-decoration::before {
+  left: -120px;
+}
+
+.board-bg-decoration::after {
+  right: -120px;
+  animation-delay: -6s;
+}
+
+/* Geometric diamond shapes */
+.board-diamond {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border: 1px solid hsl(40 90% 56% / 0.15);
+  transform: rotate(45deg);
+  animation: diamond-float 8s ease-in-out infinite;
+}
+
+.board-diamond--1 {
+  bottom: 60px;
+  left: 12%;
+  animation-delay: 0s;
+  opacity: 0.5;
+}
+
+.board-diamond--2 {
+  bottom: 100px;
+  right: 10%;
+  width: 16px;
+  height: 16px;
+  animation-delay: -3s;
+  opacity: 0.35;
+}
+
+.board-diamond--3 {
+  bottom: 40px;
+  right: 18%;
+  width: 10px;
+  height: 10px;
+  animation-delay: -5s;
+  opacity: 0.25;
+}
+
+.board-diamond--4 {
+  bottom: 80px;
+  left: 6%;
+  width: 14px;
+  height: 14px;
+  animation-delay: -2s;
+  opacity: 0.3;
+}
+
+@keyframes glow-drift {
+  0%, 100% { transform: translateY(0) scale(1); opacity: 0.07; }
+  50% { transform: translateY(-30px) scale(1.1); opacity: 0.12; }
+}
+
+@keyframes diamond-float {
+  0%, 100% { transform: rotate(45deg) translateY(0); opacity: var(--tw-opacity, 0.3); }
+  50% { transform: rotate(45deg) translateY(-12px); opacity: calc(var(--tw-opacity, 0.3) * 1.5); }
+}
+
+/* Card entrance animation */
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-card-enter {
+  animation: card-enter 0.3s ease-out both;
+}
+
+/* Tab indicator slide */
+@keyframes tab-glow {
+  0%, 100% { box-shadow: 0 0 4px hsl(40 90% 56% / 0.2); }
+  50% { box-shadow: 0 0 8px hsl(40 90% 56% / 0.35); }
+}
+
+/* Card hover glow border */
+.card-hover-glow {
+  position: relative;
+}
+
+.card-hover-glow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1px solid transparent;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  pointer-events: none;
+}
+
+.card-hover-glow:hover::before {
+  border-color: hsl(40 90% 56% / 0.15);
+  box-shadow: 0 0 12px hsl(40 90% 56% / 0.06);
+}
+
+/* Active status glow */
+.status-glow-active {
+  box-shadow: 0 0 6px currentColor;
+}
+
+/* Lightning bolt shimmer */
+@keyframes lightning-shimmer {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.4); }
+}
+
+.animate-lightning {
+  animation: lightning-shimmer 2s ease-in-out infinite;
+}
+
 @media (max-width: 639px) {
   .mobile-hide-scrollbar::-webkit-scrollbar {
     display: none;

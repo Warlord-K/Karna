@@ -70,13 +70,13 @@ export function DashboardShell({ authDisabled, children }: { authDisabled: boole
                   <Link
                     key={href}
                     href={href}
-                    className={`flex items-center gap-1.5 px-2.5 h-7 rounded-md text-[12px] font-medium transition-colors ${
+                    className={`flex items-center gap-1.5 px-2.5 h-7 rounded-md text-[12px] font-medium transition-all duration-200 ${
                       activeSection === href
-                        ? 'bg-gray-4 text-gray-12'
-                        : 'text-gray-8 hover:text-gray-11'
+                        ? 'bg-gray-4 text-gray-12 shadow-[0_0_8px_hsl(40_90%_56%/0.08)]'
+                        : 'text-gray-8 hover:text-gray-11 hover:bg-gray-3'
                     }`}
                   >
-                    <Icon size={13} weight="bold" />
+                    <Icon size={13} weight="bold" className={activeSection === href ? 'text-sun-10' : ''} />
                     <span className="hidden sm:inline">{label}</span>
                   </Link>
                 ))}
@@ -106,8 +106,17 @@ export function DashboardShell({ authDisabled, children }: { authDisabled: boole
           </div>
         </header>
 
-        <main className="flex-1 overflow-hidden">
-          {children}
+        <main className="flex-1 overflow-hidden relative">
+          {/* Decorative background */}
+          <div className="board-bg-decoration" aria-hidden="true">
+            <div className="board-diamond board-diamond--1" />
+            <div className="board-diamond board-diamond--2" />
+            <div className="board-diamond board-diamond--3" />
+            <div className="board-diamond board-diamond--4" />
+          </div>
+          <div className="relative z-[1] h-full">
+            {children}
+          </div>
         </main>
       </div>
     </AuthDisabledProvider>

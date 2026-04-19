@@ -20,7 +20,7 @@ export function ScheduleCard({ schedule, onClick, onToggle, onTrigger, isTrigger
   return (
     <div
       onClick={onClick}
-      className="group bg-gray-2 border border-gray-3 rounded-lg p-4 hover:border-gray-5 transition-colors cursor-pointer"
+      className="group card-hover-glow bg-gray-2 border border-gray-3 rounded-lg p-4 hover:border-gray-5 hover:shadow-card-glow transition-all duration-150 cursor-pointer"
     >
       {/* Top row: name + enabled toggle */}
       <div className="flex items-start justify-between gap-3 mb-2.5">

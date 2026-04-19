@@ -83,8 +83,18 @@ const config: Config = {
       boxShadow: {
         "card": "0 1px 3px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.15)",
         "card-hover": "0 4px 12px rgba(0,0,0,0.3), 0 1px 3px rgba(0,0,0,0.2)",
+        "card-glow": "0 4px 12px rgba(0,0,0,0.3), 0 0 8px rgba(229,184,71,0.06)",
         "elevated": "0 8px 30px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2)",
         "modal": "0 24px 80px rgba(0,0,0,0.55), 0 4px 16px rgba(0,0,0,0.3)",
+      },
+      keyframes: {
+        "card-enter": {
+          from: { opacity: "0", transform: "translateY(8px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+      },
+      animation: {
+        "card-enter": "card-enter 0.3s ease-out both",
       },
     },
   },
