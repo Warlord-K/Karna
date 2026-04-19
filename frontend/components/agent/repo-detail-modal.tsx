@@ -1,6 +1,7 @@
 'use client';
 
 import { RepoProfile, REPO_STATUS_COLORS, REPO_STATUS_LABELS } from '@/lib/repos';
+import { useUpdateRepo } from '@/hooks/use-repos';
 import { X, ArrowsClockwise, Trash, GitBranch } from '@phosphor-icons/react';
 import { MarkdownContent } from './markdown-content';
 
@@ -12,6 +13,8 @@ interface RepoDetailModalProps {
 }
 
 export function RepoDetailModal({ repo, onClose, onOnboard, onDelete }: RepoDetailModalProps) {
+  const updateMutation = useUpdateRepo();
+
   if (!repo) return null;
 
   const statusColor = REPO_STATUS_COLORS[repo.status];
@@ -73,6 +76,29 @@ export function RepoDetailModal({ repo, onClose, onOnboard, onDelete }: RepoDeta
             {repo.last_commit_sha && (
               <InfoItem label="SHA" value={repo.last_commit_sha.slice(0, 8)} mono />
             )}
+          </div>
+
+          {/* Settings */}
+          <div className="space-y-2">
+            <h3 className="text-[13px] font-medium text-gray-10">Settings</h3>
+            <div className="bg-gray-2 rounded-lg border border-gray-3 px-3 py-2.5 flex items-center justify-between">
+              <div>
+                <div className="text-[13px] text-gray-12">Sync GitHub Issues</div>
+                <div className="text-[11px] text-gray-7 mt-0.5">Automatically create tasks from new GitHub issues</div>
+              </div>
+              <button
+                onClick={() => updateMutation.mutate({ id: repo.id, data: { sync_issues: !repo.sync_issues } })}
+                className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${
+                  repo.sync_issues ? 'bg-sun-9' : 'bg-gray-5'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
+                    repo.sync_issues ? 'translate-x-4' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
           </div>
 
           {/* Commands */}

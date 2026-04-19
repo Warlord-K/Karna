@@ -1,7 +1,7 @@
 'use client';
 
 import { RepoProfile, REPO_STATUS_COLORS, REPO_STATUS_LABELS } from '@/lib/repos';
-import { ArrowsClockwise, GitBranch, Trash } from '@phosphor-icons/react';
+import { ArrowsClockwise, GitBranch, Trash, GithubLogo } from '@phosphor-icons/react';
 import { formatDistanceToNow } from 'date-fns';
 
 interface RepoCardProps {
@@ -87,6 +87,13 @@ export function RepoCard({ repo, onClick, onOnboard, onDelete }: RepoCardProps) 
         {framework && framework !== 'null' && (
           <span className="px-1.5 py-0.5 rounded bg-gray-3 text-gray-9 font-mono text-[11px]">
             {framework}
+          </span>
+        )}
+
+        {repo.sync_issues && (
+          <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-3 text-gray-9 text-[11px]" title="Issue sync enabled">
+            <GithubLogo size={11} weight="bold" />
+            issues
           </span>
         )}
 

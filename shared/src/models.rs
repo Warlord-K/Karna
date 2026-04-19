@@ -269,6 +269,7 @@ pub struct RepoProfile {
     pub last_commit_sha: Option<String>,
     pub error_message: Option<String>,
     pub cost_usd: f64,
+    pub sync_issues: bool,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
 }

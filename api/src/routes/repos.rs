@@ -46,6 +46,38 @@ pub async fn add(
     Ok((StatusCode::CREATED, Json(profile)))
 }
 
+#[derive(Deserialize)]
+pub struct UpdateRepo {
+    sync_issues: Option<bool>,
+}
+
+pub async fn update(
+    State(state): State<AppState>,
+    Extension(_user): Extension<UserId>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<UpdateRepo>,
+) -> Result<Json<Value>, StatusCode> {
+    if let Some(sync_issues) = body.sync_issues {
+        state
+            .db
+            .update_repo_sync_issues(id, sync_issues)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    // Return updated profile
+    let profiles = state
+        .db
+        .get_all_repo_profiles()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let profile = profiles.into_iter().find(|p| p.id == id);
+    match profile {
+        Some(p) => Ok(Json(json!(p))),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
 pub async fn delete(
     State(state): State<AppState>,
     Extension(_user): Extension<UserId>,

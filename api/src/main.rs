@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use axum::{middleware, routing::{delete, get, patch, post}, Router};
+use axum::{middleware, routing::{get, patch, post}, Router};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
@@ -80,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
         )
         // Repos
         .route("/repos", get(routes::repos::list).post(routes::repos::add))
-        .route("/repos/{id}", delete(routes::repos::delete))
+        .route("/repos/{id}", patch(routes::repos::update).delete(routes::repos::delete))
         .route("/repos/{id}/onboard", post(routes::repos::trigger_onboard))
         // Config
         .route("/config", get(routes::config::get))
