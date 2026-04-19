@@ -100,11 +100,6 @@ export default function LoginForm({ signupDisabled = false }: { signupDisabled?:
       <main className="flex-1 flex flex-col lg:flex-row items-center justify-center gap-10 lg:gap-20 px-6 sm:px-10 py-10 lg:py-0">
         {/* Left — Hero */}
         <div className="max-w-lg text-center lg:text-left">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sun-3/60 border border-sun-5/30 mb-6">
-            <span className="w-1.5 h-1.5 rounded-full bg-sun-9 animate-pulse" />
-            <span className="text-[12px] font-medium text-sun-11">Self-hosted & open source</span>
-          </div>
-
           <h1 className="text-[36px] sm:text-[44px] font-bold text-gray-12 tracking-[-0.03em] leading-[1.1]">
             Autonomous<br />
             <span className="text-sun-9">Coding Agent</span>
@@ -113,8 +108,19 @@ export default function LoginForm({ signupDisabled = false }: { signupDisabled?:
             Create tasks on a kanban board, an AI agent plans and implements them, opens PRs, and iterates on your feedback.
           </p>
 
+          {/* Screenshot preview */}
+          <div className="mt-8">
+            <div className="rounded-xl overflow-hidden border border-gray-3/60 shadow-elevated">
+              <img
+                src="/Cover.png"
+                alt="Karna dashboard preview"
+                className="w-full h-auto"
+              />
+            </div>
+          </div>
+
           {/* Feature grid */}
-          <div className="grid grid-cols-2 gap-3 mt-8">
+          <div className="grid grid-cols-2 gap-3 mt-6">
             {FEATURES.map((f) => (
               <div key={f.title} className="flex items-start gap-2.5 p-3 rounded-xl bg-gray-2/50 border border-gray-3/60">
                 <f.icon size={18} weight="bold" className="text-sun-9 mt-0.5 flex-shrink-0" />
@@ -124,17 +130,6 @@ export default function LoginForm({ signupDisabled = false }: { signupDisabled?:
                 </div>
               </div>
             ))}
-          </div>
-
-          {/* Screenshot preview */}
-          <div className="mt-8 hidden lg:block">
-            <div className="rounded-xl overflow-hidden border border-gray-3/60 shadow-elevated">
-              <img
-                src="/Cover.png"
-                alt="Karna dashboard preview"
-                className="w-full h-auto"
-              />
-            </div>
           </div>
         </div>
 
@@ -223,22 +218,8 @@ export default function LoginForm({ signupDisabled = false }: { signupDisabled?:
             )}
           </div>
 
-          <p className="text-center text-[11px] text-gray-7 mt-4">
-            Self-hosted instance &middot; Your data stays on your server
-          </p>
         </div>
       </main>
-
-      {/* Mobile screenshot */}
-      <div className="lg:hidden px-6 pb-10">
-        <div className="rounded-xl overflow-hidden border border-gray-3/60 shadow-card">
-          <img
-            src="/Cover.png"
-            alt="Karna dashboard preview"
-            className="w-full h-auto"
-          />
-        </div>
-      </div>
 
       {/* Decorative background */}
       <div className="board-bg-decoration" aria-hidden="true">
