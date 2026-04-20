@@ -1,0 +1,66 @@
+Karna has been deployed!
+
+{{- if .Values.ingress.enabled }}
+
+Access the application at:
+{{- range .Values.ingress.hosts }}
+  {{- if $.Values.ingress.tls }}
+  https://{{ .host }}
+  {{- else }}
+  http://{{ .host }}
+  {{- end }}
+{{- end }}
+
+{{- if .Values.ingress.agent.enabled }}
+GitHub webhook URL: https://{{ .Values.ingress.agent.host }}{{ .Values.ingress.agent.path }}
+{{- end }}
+
+{{- if and .Values.codeServer.enabled .Values.ingress.codeServer.enabled }}
+Code-server: https://{{ .Values.ingress.codeServer.host }}
+{{- end }}
+
+{{- else }}
+
+The application is not exposed via Ingress. Use port-forwarding to access it:
+
+  # Frontend (UI)
+  kubectl port-forward svc/{{ include "karna.fullname" . }}-frontend 3000:3000
+
+  # API
+  kubectl port-forward svc/{{ include "karna.fullname" . }}-api 8081:8081
+
+{{- if .Values.codeServer.enabled }}
+  # Code-server (IDE)
+  kubectl port-forward svc/{{ include "karna.fullname" . }}-code-server 8080:8080
+{{- end }}
+{{- end }}
+
+Verify the deployment:
+
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+Run the built-in connection test:
+
+  helm test {{ .Release.Name }}
+
+{{- if not .Values.config.repos }}
+
+WARNING: No repositories configured. Add repos to values.yaml:
+
+  config:
+    repos:
+      - repo: owner/my-app
+        branch: main
+{{- end }}
+
+{{- if and (not .Values.github.token) (not .Values.github.existingSecret) }}
+
+WARNING: No GITHUB_TOKEN configured. The agent cannot create PRs without it.
+Set github.token or github.existingSecret in your values.
+{{- end }}
+
+{{- if and (not .Values.claude.oauthToken) (not .Values.claude.existingSecret) }}
+
+WARNING: No CLAUDE_CODE_OAUTH_TOKEN configured. The agent needs this to invoke Claude Code.
+Set claude.oauthToken or claude.existingSecret in your values.
+{{- end }}

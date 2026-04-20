@@ -1,0 +1,27 @@
+{{- if .Values.podDisruptionBudget.api.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "karna.fullname" . }}-api
+  labels:
+    {{- include "karna.componentLabels" (dict "context" . "component" "api") | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.api.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "karna.selectorLabels" (dict "context" . "component" "api") | nindent 6 }}
+{{- end }}
+---
+{{- if .Values.podDisruptionBudget.frontend.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "karna.fullname" . }}-frontend
+  labels:
+    {{- include "karna.componentLabels" (dict "context" . "component" "frontend") | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.frontend.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "karna.selectorLabels" (dict "context" . "component" "frontend") | nindent 6 }}
+{{- end }}

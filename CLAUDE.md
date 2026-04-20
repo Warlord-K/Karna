@@ -697,6 +697,80 @@ Optional servers (need API keys in .env):
 
 Repos can also provide `.mcp.json` at their root — these are auto-discovered and merged with the global config at runtime. Global servers take precedence on name conflicts.
 
+## Kubernetes / Helm
+
+Production-grade Helm chart in `charts/karna/`. Packages all services for Kubernetes deployment with Bitnami subcharts for PostgreSQL and Redis.
+
+### Quick Start
+
+```bash
+# Add Bitnami dependency repo
+helm dependency update charts/karna
+
+# Install with minimal config
+helm install karna charts/karna \
+  --set github.token=ghp_... \
+  --set claude.oauthToken=... \
+  --set config.repos[0].repo=owner/my-app \
+  --set config.repos[0].branch=main
+
+# Production install
+helm install karna charts/karna \
+  -f charts/karna/values.production.yaml \
+  -f my-values.yaml
+```
+
+### Chart Structure
+
+```
+charts/karna/
+├── Chart.yaml                    # Metadata + Bitnami PostgreSQL/Redis dependencies
+├── values.yaml                   # Default configuration
+├── values.production.yaml        # Production overlay (higher replicas, stricter limits)
+├── files/
+│   ├── migrations/               # SQL migrations + runner (synced from migrations/)
+│   └── skills/                   # Built-in skill files (synced from skills/)
+└── templates/
+    ├── _helpers.tpl              # Reusable helpers (fullname, labels, DB/Redis URLs)
+    ├── NOTES.txt                 # Post-install instructions
+    ├── configmap.yaml            # config.yaml from values
+    ├── configmap-migrations.yaml # Migration files (pre-install hook)
+    ├── configmap-skills.yaml     # Skill files for agent
+    ├── secret.yaml               # All credentials (supports existingSecret)
+    ├── migration-job.yaml        # Pre-install/upgrade Job
+    ├── serviceaccount.yaml
+    ├── pdb.yaml                  # Pod disruption budgets
+    ├── ingress.yaml              # Main + agent webhook + code-server
+    ├── api/                      # Deployment, Service, HPA
+    ├── agent/                    # Deployment, Service, PVC (workspace + keyring)
+    ├── frontend/                 # Deployment, Service
+    ├── code-server/              # Deployment, Service, PVC (optional)
+    └── tests/                    # Helm test pod
+```
+
+### Key Differences from Docker Compose
+
+| Docker Compose | Helm Chart |
+|---|---|
+| autoheal container | Kubernetes liveness/readiness probes + restart policies |
+| Cloudflare tunnel | Kubernetes Ingress (nginx, traefik, ALB) |
+| `docker compose --scale agent=N` | `agent.replicaCount: N` in values |
+| `.env` file | Kubernetes Secrets (or `existingSecret` refs) |
+| Named volumes | PersistentVolumeClaims |
+| `migrate` service | Pre-install/upgrade Job with hook |
+
+### External Database/Redis
+
+Set `postgresql.enabled: false` / `redis.enabled: false` and configure `postgresql.external.*` / `redis.external.*` to use managed services.
+
+### Scaling Agents
+
+Multiple agent replicas require `ReadWriteMany` (RWX) storage for the workspace PVC. Set `agent.workspace.accessMode: ReadWriteMany` and use an RWX-capable storage class (EFS, NFS, CephFS).
+
+### File Sync
+
+Migration and skill files in `charts/karna/files/` are copies of the repo-root `migrations/` and `skills/` directories. Keep them in sync when modifying migrations or skills.
+
 ## Rules
 
 - Tailwind classes only, no vanilla CSS

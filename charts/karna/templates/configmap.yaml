@@ -1,0 +1,55 @@
+{{- if not .Values.config.existingConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "karna.configMapName" . }}
+  labels:
+    {{- include "karna.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    repos:
+    {{- range .Values.config.repos }}
+      - repo: {{ .repo }}
+        branch: {{ .branch | default "main" }}
+        {{- if hasKey . "sync_issues" }}
+        sync_issues: {{ .sync_issues }}
+        {{- end }}
+        {{- if .self }}
+        self: true
+        {{- end }}
+    {{- end }}
+
+    agent:
+      max_turns: {{ .Values.config.maxTurns }}
+      poll_interval_secs: {{ .Values.config.pollIntervalSecs }}
+      max_concurrent_tasks: {{ .Values.config.maxConcurrentTasks }}
+      {{- if .Values.config.instructions }}
+      instructions: /etc/karna/instructions.md
+      {{- end }}
+      backends:
+        {{- range $name, $backend := .Values.config.backends }}
+        {{ $name }}:
+          models: {{ toJson $backend.models }}
+          default_model: {{ $backend.default_model }}
+        {{- end }}
+
+    {{- if .Values.config.mcpServers }}
+    mcp_servers:
+      {{- range .Values.config.mcpServers }}
+      - name: {{ .name }}
+        command: {{ .command }}
+        args: {{ toJson .args }}
+        {{- if .env }}
+        env:
+          {{- range $k, $v := .env }}
+          {{ $k }}: {{ $v | quote }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+
+  {{- if .Values.config.instructions }}
+  instructions.md: |
+    {{- .Values.config.instructions | nindent 4 }}
+  {{- end }}
+{{- end }}

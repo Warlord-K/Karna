@@ -1,0 +1,252 @@
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+
+# -- API server (Rust/Axum)
+api:
+  image:
+    repository: ghcr.io/warlord-k/karna-api
+    tag: ""  # Defaults to Chart.appVersion
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilization: 70
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- Agent worker (Rust)
+agent:
+  image:
+    repository: ghcr.io/warlord-k/karna-agent
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  terminationGracePeriodSeconds: 600  # 10min drain for active tasks
+  workspace:
+    storageClass: ""
+    size: 50Gi
+    # Set to ReadWriteMany if scaling agents > 1 (requires RWX-capable storage like EFS/NFS)
+    accessMode: ReadWriteOnce
+  keyring:
+    storageClass: ""
+    size: 1Gi
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- Frontend (Next.js)
+frontend:
+  image:
+    repository: ghcr.io/warlord-k/karna-frontend
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 250m
+      memory: 512Mi
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- Code-Server (browser IDE, optional)
+codeServer:
+  enabled: false
+  image:
+    repository: ghcr.io/warlord-k/karna-code-server
+    tag: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  password: ""  # Override via secret; defaults to "changeme"
+  extensions:
+    storageClass: ""
+    size: 5Gi
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- PostgreSQL (Bitnami subchart)
+postgresql:
+  enabled: true
+  auth:
+    username: karna
+    password: ""  # Auto-generated if empty
+    database: karna
+    existingSecret: ""
+  primary:
+    persistence:
+      size: 20Gi
+  # External DB (when postgresql.enabled=false)
+  external:
+    host: ""
+    port: 5432
+    username: karna
+    password: ""
+    database: karna
+    existingSecret: ""
+    # Key in existing secret containing the password
+    existingSecretPasswordKey: password
+
+# -- Redis (Bitnami subchart)
+redis:
+  enabled: true
+  auth:
+    enabled: false
+  master:
+    persistence:
+      size: 2Gi
+  # External Redis (when redis.enabled=false)
+  external:
+    host: ""
+    port: 6379
+    password: ""
+
+# -- Auth & Secrets
+auth:
+  # AUTH_SECRET for Auth.js session encryption (auto-generated if empty)
+  secret: ""
+  disabled: false
+  signupDisabled: true
+  existingSecret: ""
+  # Keys in existing secret
+  existingSecretAuthKey: auth-secret
+
+# -- GitHub
+github:
+  token: ""
+  webhookSecret: ""
+  existingSecret: ""
+  existingSecretTokenKey: github-token
+  existingSecretWebhookKey: webhook-secret
+
+# -- Claude Code CLI
+claude:
+  oauthToken: ""
+  existingSecret: ""
+  existingSecretTokenKey: oauth-token
+
+# -- Agent configuration (rendered as config.yaml)
+config:
+  repos: []
+  #  - repo: owner/my-app
+  #    branch: main
+  #    sync_issues: true
+  maxTurns: 100
+  pollIntervalSecs: 30
+  maxConcurrentTasks: 1
+  backends:
+    claude:
+      models: [opus, sonnet, haiku]
+      default_model: sonnet
+    codex:
+      models: [gpt-5.4, gpt-5.4-mini, gpt-5.3-codex]
+      default_model: gpt-5.4
+  mcpServers: []
+  instructions: ""
+  existingConfigMap: ""
+
+# -- Git identity for agent commits
+git:
+  authorName: "Karna Agent"
+  authorEmail: "agent@karna.dev"
+  signing:
+    enabled: false
+    # Name of existing secret containing SSH signing key (key: signing-key)
+    existingSecret: ""
+
+# -- Email notifications (optional, requires Resend)
+notifications:
+  email: ""
+  fromEmail: ""
+  resendApiKey: ""
+  existingSecret: ""
+  existingSecretApiKeyKey: resend-api-key
+
+# -- Ingress
+ingress:
+  enabled: true
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: karna.example.com
+      paths:
+        - path: /
+          service: frontend
+        - path: /api
+          service: api
+  tls: []
+  #  - secretName: karna-tls
+  #    hosts:
+  #      - karna.example.com
+
+  # Agent webhook ingress (for GitHub webhooks)
+  agent:
+    enabled: false
+    host: agent.example.com
+    path: /webhooks/github
+    annotations: {}
+    tls: []
+
+  # Code-server ingress
+  codeServer:
+    enabled: false
+    host: code.example.com
+    annotations: {}
+    tls: []
+
+# -- Pod disruption budgets
+podDisruptionBudget:
+  api:
+    enabled: true
+    minAvailable: 1
+  frontend:
+    enabled: true
+    minAvailable: 1
+
+# -- Service account
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# -- Migration job
+migration:
+  backoffLimit: 3
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
