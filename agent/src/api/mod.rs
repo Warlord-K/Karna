@@ -17,11 +17,14 @@ use crate::models::TaskStatus;
 type HmacSha256 = Hmac<Sha256>;
 
 /// Verify the GitHub webhook signature (X-Hub-Signature-256 header).
-/// Returns true if no secret is configured (verification disabled).
+/// Returns false if no secret is configured (webhooks rejected).
 fn verify_webhook_signature(secret: Option<&str>, signature_header: Option<&str>, body: &[u8]) -> bool {
     let secret = match secret {
         Some(s) => s,
-        None => return true, // No secret configured — accept all
+        None => {
+            warn!("GITHUB_WEBHOOK_SECRET not configured — rejecting webhook");
+            return false;
+        }
     };
 
     let signature = match signature_header {

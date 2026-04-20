@@ -450,7 +450,7 @@ The agent receives PR feedback from GitHub via webhooks — it does **not** poll
 
 **Auto-registration:** Webhooks are automatically registered on repos during onboarding when a public URL is available. The agent derives `webhook_url` from: `AGENT_WEBHOOK_URL` env → `TUNNEL_AGENT_HOSTNAME` env (prefixed with `https://`) → None. If available, `onboard_repo()` calls `github::ensure_repo_webhook()` after profiling completes. Idempotent — checks existing hooks first. Requires `admin:repo_hook` scope on `GITHUB_TOKEN`; logs a warning and continues if missing.
 
-**Signature verification:** When `GITHUB_WEBHOOK_SECRET` is set, the handler verifies `X-Hub-Signature-256` using HMAC-SHA256. If no secret is configured, all payloads are accepted (verification disabled). The same secret is passed to GitHub when auto-registering webhooks during onboarding.
+**Signature verification:** When `GITHUB_WEBHOOK_SECRET` is set, the handler verifies `X-Hub-Signature-256` using HMAC-SHA256. If no secret is configured, all payloads are rejected and a startup warning is logged. The same secret is passed to GitHub when auto-registering webhooks during onboarding.
 
 **Key files:**
 - `agent/src/api/mod.rs` — Webhook handler + HMAC-SHA256 verification
@@ -491,7 +491,7 @@ All secrets live in `.env` (gitignored). User config lives in `config.yaml` (git
 | AGENT_API_PORT | No (default 8080) | Host port for agent API (webhooks, health) |
 | TUNNEL_AGENT_HOSTNAME | No | Hostname for agent API (CF tunnel); also webhook URL fallback |
 | AGENT_WEBHOOK_URL | No | Full URL override for webhook registration (e.g. ngrok URL) |
-| GITHUB_WEBHOOK_SECRET | No | HMAC-SHA256 secret for webhook signature verification |
+| GITHUB_WEBHOOK_SECRET | No | HMAC-SHA256 secret for webhook signature verification (required for webhooks to be accepted) |
 
 ## Code Server (Browser IDE)
 

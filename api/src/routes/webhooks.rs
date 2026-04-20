@@ -215,7 +215,10 @@ async fn handle_issue_opened(state: &AppState, payload: &serde_json::Value) -> S
 fn verify_signature(secret: Option<&str>, signature_header: Option<&str>, body: &[u8]) -> bool {
     let secret = match secret {
         Some(s) => s,
-        None => return true, // No secret configured — accept all
+        None => {
+            warn!("GITHUB_WEBHOOK_SECRET not configured — rejecting webhook");
+            return false;
+        }
     };
 
     let signature = match signature_header {
