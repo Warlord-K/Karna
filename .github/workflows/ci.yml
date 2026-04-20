@@ -71,6 +71,9 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@v4
 
+      - name: Build dependencies
+        run: helm dependency build charts/karna
+
       - name: Lint chart
         run: helm lint charts/karna
 
