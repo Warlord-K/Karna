@@ -15,6 +15,12 @@ pub async fn configure_git_auth(github_token: &str) -> Result<()> {
     )
     .await?;
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(&cred_path, std::fs::Permissions::from_mode(0o600)).await?;
+    }
+
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let git_dir = Path::new(&home);
 
