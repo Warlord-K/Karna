@@ -1,0 +1,113 @@
+{{- if .Values.codeServer.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "karna.fullname" . }}-code-server
+  labels:
+    {{- include "karna.componentLabels" (dict "context" . "component" "code-server") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "karna.selectorLabels" (dict "context" . "component" "code-server") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.codeServer.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "karna.selectorLabels" (dict "context" . "component" "code-server") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "karna.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: code-server
+          image: {{ include "karna.image" (dict "image" .Values.codeServer.image "global" .Values.global "appVersion" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.codeServer.image.pullPolicy }}
+          args:
+            - --auth
+            - password
+            - --bind-addr
+            - 0.0.0.0:8080
+            - /workspace
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: PASSWORD
+              {{- if or .Values.codeServer.password (not .Values.auth.existingSecret) }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "karna.secretName" . }}
+                  key: code-server-password
+                  optional: true
+              {{- else }}
+              value: "changeme"
+              {{- end }}
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.github.existingSecret | default (include "karna.secretName" .) }}
+                  key: {{ .Values.github.existingSecretTokenKey | default "github-token" }}
+                  optional: true
+            - name: GH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.github.existingSecret | default (include "karna.secretName" .) }}
+                  key: {{ .Values.github.existingSecretTokenKey | default "github-token" }}
+                  optional: true
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: config
+              mountPath: /etc/karna/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: extensions
+              mountPath: /home/coder/.local/share/code-server/extensions
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            failureThreshold: 3
+          {{- with .Values.codeServer.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: {{ include "karna.fullname" . }}-workspace
+        - name: config
+          configMap:
+            name: {{ include "karna.configMapName" . }}
+        - name: extensions
+          persistentVolumeClaim:
+            claimName: {{ include "karna.fullname" . }}-code-server-extensions
+      {{- with .Values.codeServer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.codeServer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.codeServer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
