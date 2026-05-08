@@ -1,0 +1,17 @@
+{{- if .Values.codeServer.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "karna.fullname" . }}-code-server-extensions
+  labels:
+    {{- include "karna.componentLabels" (dict "context" . "component" "code-server") | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.codeServer.extensions.storageClass }}
+  storageClassName: {{ .Values.codeServer.extensions.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.codeServer.extensions.size }}
+{{- end }}

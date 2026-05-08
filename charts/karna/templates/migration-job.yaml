@@ -1,0 +1,74 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "karna.fullname" . }}-migrate
+  labels:
+    {{- include "karna.componentLabels" (dict "context" . "component" "migrate") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "karna.selectorLabels" (dict "context" . "component" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command: ["sh", "-c"]
+          args:
+            - |
+              until pg_isready -h {{ include "karna.postgresHost" . }} -p {{ include "karna.postgresPort" . }} -U {{ include "karna.postgresUser" . }}; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "karna.postgresPasswordSecret" . }}
+                  key: {{ include "karna.postgresPasswordSecretKey" . }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+      containers:
+        - name: migrate
+          image: postgres:16-alpine
+          command: ["/bin/bash", "/migrations/run.sh"]
+          env:
+            - name: POSTGRES_USER
+              value: {{ include "karna.postgresUser" . | quote }}
+            - name: POSTGRES_DB
+              value: {{ include "karna.postgresDatabase" . | quote }}
+            - name: POSTGRES_HOST
+              value: {{ include "karna.postgresHost" . | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "karna.postgresPasswordSecret" . }}
+                  key: {{ include "karna.postgresPasswordSecretKey" . }}
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+              readOnly: true
+          {{- with .Values.migration.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: migrations
+          configMap:
+            name: {{ include "karna.fullname" . }}-migrations
+            defaultMode: 0755

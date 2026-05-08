@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "karna.fullname" . }}-workspace
+  labels:
+    {{- include "karna.componentLabels" (dict "context" . "component" "agent") | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.agent.workspace.accessMode }}
+  {{- if .Values.agent.workspace.storageClass }}
+  storageClassName: {{ .Values.agent.workspace.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.agent.workspace.size }}

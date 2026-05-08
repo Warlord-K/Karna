@@ -62,6 +62,36 @@ jobs:
           DATABASE_URL: postgres://dummy:dummy@localhost:5432/dummy
           AUTH_SECRET: ci-test-secret
 
+  helm:
+    name: Helm Chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Build dependencies
+        run: helm dependency build charts/karna
+
+      - name: Lint chart
+        run: helm lint charts/karna
+
+      - name: Template (default values)
+        run: helm template karna charts/karna
+
+      - name: Template (production values)
+        run: helm template karna charts/karna -f charts/karna/values.production.yaml
+
+      - name: Template (external DB)
+        run: |
+          helm template karna charts/karna \
+            --set postgresql.enabled=false \
+            --set postgresql.external.host=mydb.example.com \
+            --set postgresql.external.password=test \
+            --set redis.enabled=false \
+            --set redis.external.host=myredis.example.com
+
   docker:
     name: Docker Build
     runs-on: ubuntu-latest

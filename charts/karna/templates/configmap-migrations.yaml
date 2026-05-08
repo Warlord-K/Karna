@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "karna.fullname" . }}-migrations
+  labels:
+    {{- include "karna.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+data:
+  run.sh: |
+    {{- .Files.Get "files/migrations/run.sh" | nindent 4 }}
+  {{- range $path, $_ := .Files.Glob "files/migrations/[0-9]*.sql" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}

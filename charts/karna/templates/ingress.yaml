@@ -1,0 +1,105 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "karna.fullname" . }}
+  labels:
+    {{- include "karna.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    {{- toYaml .Values.ingress.tls | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: Prefix
+            backend:
+              service:
+                {{- if eq .service "frontend" }}
+                name: {{ include "karna.fullname" $ }}-frontend
+                port:
+                  number: 3000
+                {{- else if eq .service "api" }}
+                name: {{ include "karna.fullname" $ }}-api
+                port:
+                  number: 8081
+                {{- end }}
+          {{- end }}
+    {{- end }}
+{{- end }}
+---
+{{- if and .Values.ingress.enabled .Values.ingress.agent.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "karna.fullname" . }}-agent-webhook
+  labels:
+    {{- include "karna.labels" . | nindent 4 }}
+  {{- with .Values.ingress.agent.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.agent.tls }}
+  tls:
+    {{- toYaml .Values.ingress.agent.tls | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.agent.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.agent.path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "karna.fullname" . }}-agent
+                port:
+                  number: 8080
+{{- end }}
+---
+{{- if and .Values.ingress.enabled .Values.codeServer.enabled .Values.ingress.codeServer.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "karna.fullname" . }}-code-server
+  labels:
+    {{- include "karna.labels" . | nindent 4 }}
+  {{- with .Values.ingress.codeServer.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.codeServer.tls }}
+  tls:
+    {{- toYaml .Values.ingress.codeServer.tls | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.codeServer.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "karna.fullname" . }}-code-server
+                port:
+                  number: 8080
+{{- end }}

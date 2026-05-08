@@ -1,0 +1,155 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "karna.fullname" . }}-agent
+  labels:
+    {{- include "karna.componentLabels" (dict "context" . "component" "agent") | nindent 4 }}
+spec:
+  replicas: {{ .Values.agent.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "karna.selectorLabels" (dict "context" . "component" "agent") | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.agent.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "karna.selectorLabels" (dict "context" . "component" "agent") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "karna.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.agent.terminationGracePeriodSeconds }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: agent
+          image: {{ include "karna.image" (dict "image" .Values.agent.image "global" .Values.global "appVersion" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "karna.postgresPasswordSecret" . }}
+                  key: {{ include "karna.postgresPasswordSecretKey" . }}
+            - name: DATABASE_URL
+              value: {{ include "karna.databaseUrl" . }}
+            - name: REDIS_URL
+              value: {{ include "karna.redisUrl" . }}
+            - name: REPOS_DIR
+              value: /workspace
+            - name: WORKSPACES_DIR
+              value: /workspace/.workspaces
+            - name: CONFIG_PATH
+              value: /etc/karna/config.yaml
+            - name: GIT_AUTHOR_NAME
+              value: {{ .Values.git.authorName | quote }}
+            - name: GIT_AUTHOR_EMAIL
+              value: {{ .Values.git.authorEmail | quote }}
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.github.existingSecret | default (include "karna.secretName" .) }}
+                  key: {{ .Values.github.existingSecretTokenKey | default "github-token" }}
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.claude.existingSecret | default (include "karna.secretName" .) }}
+                  key: {{ .Values.claude.existingSecretTokenKey | default "oauth-token" }}
+                  optional: true
+            {{- if .Values.github.webhookSecret }}
+            - name: GITHUB_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.github.existingSecret | default (include "karna.secretName" .) }}
+                  key: {{ .Values.github.existingSecretWebhookKey | default "webhook-secret" }}
+            {{- end }}
+            {{- if or .Values.notifications.resendApiKey .Values.notifications.existingSecret }}
+            - name: RESEND_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.notifications.existingSecret | default (include "karna.secretName" .) }}
+                  key: {{ .Values.notifications.existingSecretApiKeyKey | default "resend-api-key" }}
+            {{- end }}
+            {{- if .Values.ingress.agent.enabled }}
+            - name: AGENT_WEBHOOK_URL
+              value: "https://{{ .Values.ingress.agent.host }}{{ .Values.ingress.agent.path }}"
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/karna/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            {{- if .Values.config.instructions }}
+            - name: config
+              mountPath: /etc/karna/instructions.md
+              subPath: instructions.md
+              readOnly: true
+            {{- end }}
+            - name: skills
+              mountPath: /etc/karna/skills
+              readOnly: true
+            - name: workspace
+              mountPath: /workspace
+            - name: keyring
+              mountPath: /home/agent/.local/share/keyrings
+            {{- if .Values.git.signing.enabled }}
+            - name: signing-key
+              mountPath: /home/agent/.ssh/signing
+              readOnly: true
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            failureThreshold: 3
+          {{- with .Values.agent.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "karna.configMapName" . }}
+        - name: skills
+          configMap:
+            name: {{ include "karna.fullname" . }}-skills
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: {{ include "karna.fullname" . }}-workspace
+        - name: keyring
+          persistentVolumeClaim:
+            claimName: {{ include "karna.fullname" . }}-keyring
+        {{- if .Values.git.signing.enabled }}
+        - name: signing-key
+          secret:
+            secretName: {{ .Values.git.signing.existingSecret }}
+            defaultMode: 0600
+        {{- end }}
+      {{- with .Values.agent.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.agent.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.agent.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
