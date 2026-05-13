@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish (e.g. 0.1.0). Also pushes :latest."
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  publish:
+    name: Build & Push ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: agent
+            context: .
+            dockerfile: agent/Dockerfile
+          - service: api
+            context: .
+            dockerfile: api/Dockerfile
+          - service: frontend
+            context: frontend
+            dockerfile: frontend/Dockerfile
+          - service: code-server
+            context: code-server
+            dockerfile: code-server/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME#v}"
+          fi
+          OWNER_LC="${OWNER,,}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "image=${REGISTRY}/${OWNER_LC}/karna-${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.tag }}
+            ${{ steps.tag.outputs.image }}:latest
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          provenance: false
+
+  chart:
+    name: Bump chart & publish OCI
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME#v}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Bump Chart.yaml
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          sed -i -E "s/^version: .*/version: ${TAG}/" charts/karna/Chart.yaml
+          sed -i -E "s/^appVersion: .*/appVersion: \"${TAG}\"/" charts/karna/Chart.yaml
+          echo "--- updated Chart.yaml ---"
+          head -10 charts/karna/Chart.yaml
+
+      - name: Commit bump to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add charts/karna/Chart.yaml
+          if git diff --staged --quiet; then
+            echo "Chart already at ${{ steps.tag.outputs.tag }}, nothing to commit"
+          else
+            git commit -m "chore(chart): bump to ${{ steps.tag.outputs.tag }} [skip ci]"
+            git push origin HEAD:main
+          fi
+
+      - uses: azure/setup-helm@v4
+
+      - name: Login to GHCR for Helm
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${REGISTRY} -u ${{ github.actor }} --password-stdin
+
+      - name: Package & push chart
+        run: |
+          OWNER_LC="${OWNER,,}"
+          helm dependency build charts/karna
+          helm package charts/karna -d /tmp
+          helm push /tmp/karna-${{ steps.tag.outputs.tag }}.tgz oci://${REGISTRY}/${OWNER_LC}/charts
