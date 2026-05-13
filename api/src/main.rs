@@ -37,8 +37,10 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .expect("PORT must be a number");
 
-    let db = karna_shared::db::Database::connect(&database_url).await?;
     let redis = redis::Client::open(redis_url)?;
+    let db = karna_shared::db::Database::connect(&database_url)
+        .await?
+        .with_redis(redis.clone());
     let config = config::load()?;
 
     let state = AppState { db, redis, config };

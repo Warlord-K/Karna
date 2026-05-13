@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     Extension, Json,
 };
+use karna_shared::cache;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -30,22 +31,23 @@ pub async fn list(
     State(state): State<AppState>,
     Extension(user): Extension<UserId>,
 ) -> Result<Json<Value>, StatusCode> {
-    let schedules = state
-        .db
-        .list_schedules_for_user(user.0)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let key = cache::schedules_list_key(user.0);
+    let db = state.db.clone();
+    let result = cache::get_or_set(&state.redis, &key, cache::DEFAULT_TTL_SECS, move || async move {
+        let schedules = db.list_schedules_for_user(user.0).await?;
+        let mut result = Vec::new();
+        for s in &schedules {
+            let last_run = db.get_last_run(s.id).await.ok().flatten();
+            let mut val = serde_json::to_value(s).unwrap_or(json!({}));
+            val["last_run"] = serde_json::to_value(&last_run).unwrap_or(Value::Null);
+            result.push(val);
+        }
+        Ok(Value::Array(result))
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Join last run for each schedule
-    let mut result = Vec::new();
-    for s in &schedules {
-        let last_run = state.db.get_last_run(s.id).await.ok().flatten();
-        let mut val = serde_json::to_value(s).unwrap_or(json!({}));
-        val["last_run"] = serde_json::to_value(&last_run).unwrap_or(Value::Null);
-        result.push(val);
-    }
-
-    Ok(Json(Value::Array(result)))
+    Ok(Json(result))
 }
 
 pub async fn create(
@@ -176,11 +178,13 @@ pub async fn list_runs(
         return Err(StatusCode::NOT_FOUND);
     }
 
-    let runs = state
-        .db
-        .get_schedule_runs(id, 50)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let key = cache::schedule_runs_key(id);
+    let db = state.db.clone();
+    let runs = cache::get_or_set(&state.redis, &key, cache::DEFAULT_TTL_SECS, move || async move {
+        db.get_schedule_runs(id, 50).await
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(runs))
 }
@@ -194,11 +198,13 @@ pub async fn run_logs(
         return Err(StatusCode::NOT_FOUND);
     }
 
-    let logs = state
-        .db
-        .get_run_logs(run_id, 200)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let key = cache::schedule_run_logs_key(run_id);
+    let db = state.db.clone();
+    let logs = cache::get_or_set(&state.redis, &key, cache::DEFAULT_TTL_SECS, move || async move {
+        db.get_run_logs(run_id, 200).await
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(logs))
 }

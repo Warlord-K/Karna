@@ -4,11 +4,13 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::cache;
 use crate::models::{AgentLog, AgentTask, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment};
 
 #[derive(Clone)]
 pub struct Database {
     pool: PgPool,
+    redis: Option<redis::Client>,
 }
 
 impl Database {
@@ -17,7 +19,49 @@ impl Database {
             .max_connections(10)
             .connect(url)
             .await?;
-        Ok(Self { pool })
+        Ok(Self { pool, redis: None })
+    }
+
+    /// Attach a Redis client so writes automatically invalidate cache keys.
+    /// Without this, writes still succeed; only cache busting is skipped.
+    pub fn with_redis(mut self, redis: redis::Client) -> Self {
+        self.redis = Some(redis);
+        self
+    }
+
+    // --- Cache invalidation helpers (no-ops when redis is None) ---
+
+    async fn bust_tasks(&self, task_id: Option<Uuid>) {
+        let Some(r) = &self.redis else { return };
+        cache::invalidate_pattern(r, cache::TASKS_LIST_PATTERN).await;
+        if let Some(id) = task_id {
+            cache::invalidate(r, &cache::tasks_logs_key(id)).await;
+        }
+    }
+
+    async fn bust_task_logs(&self, task_id: Uuid) {
+        let Some(r) = &self.redis else { return };
+        cache::invalidate(r, &cache::tasks_logs_key(task_id)).await;
+    }
+
+    async fn bust_schedules(&self, schedule_id: Option<Uuid>) {
+        let Some(r) = &self.redis else { return };
+        cache::invalidate_pattern(r, cache::SCHEDULES_LIST_PATTERN).await;
+        if let Some(id) = schedule_id {
+            cache::invalidate(r, &cache::schedule_runs_key(id)).await;
+        }
+    }
+
+    async fn bust_schedule_run(&self, run_id: Uuid) {
+        let Some(r) = &self.redis else { return };
+        cache::invalidate(r, &cache::schedule_run_logs_key(run_id)).await;
+    }
+
+    async fn bust_repos(&self) {
+        let Some(r) = &self.redis else { return };
+        cache::invalidate(r, cache::REPOS_LIST_KEY).await;
+        // /api/config also embeds repo profiles
+        cache::invalidate(r, cache::CONFIG_KEY).await;
     }
 
     // --- Task queries ---
@@ -118,6 +162,7 @@ impl Database {
         .bind(model)
         .fetch_one(&self.pool)
         .await?;
+        self.bust_tasks(Some(task.id)).await;
         Ok(task)
     }
 
@@ -176,6 +221,9 @@ impl Database {
         query = query.bind(id).bind(user_id).bind(default_id);
 
         let result = query.execute(&self.pool).await?;
+        if result.rows_affected() > 0 {
+            self.bust_tasks(Some(id)).await;
+        }
         Ok(result.rows_affected())
     }
 
@@ -190,6 +238,9 @@ impl Database {
         .bind(default_id)
         .execute(&self.pool)
         .await?;
+        if result.rows_affected() > 0 {
+            self.bust_tasks(Some(id)).await;
+        }
         Ok(result.rows_affected())
     }
 
@@ -199,6 +250,7 @@ impl Database {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        self.bust_tasks(Some(id)).await;
         Ok(())
     }
 
@@ -210,6 +262,7 @@ impl Database {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        self.bust_tasks(Some(id)).await;
         Ok(())
     }
 
@@ -219,6 +272,7 @@ impl Database {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        self.bust_tasks(Some(id)).await;
         Ok(())
     }
 
@@ -231,6 +285,7 @@ impl Database {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        self.bust_tasks(Some(id)).await;
         Ok(())
     }
 
@@ -242,6 +297,7 @@ impl Database {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        self.bust_tasks(Some(id)).await;
         Ok(())
     }
 
@@ -250,6 +306,7 @@ impl Database {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        self.bust_tasks(Some(id)).await;
         Ok(())
     }
 
@@ -262,6 +319,7 @@ impl Database {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        self.bust_tasks(Some(id)).await;
         Ok(())
     }
 
@@ -271,6 +329,7 @@ impl Database {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        self.bust_tasks(Some(id)).await;
         Ok(())
     }
 
@@ -290,6 +349,7 @@ impl Database {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        self.bust_tasks(Some(id)).await;
         Ok(())
     }
 
@@ -336,6 +396,7 @@ impl Database {
         .bind(model)
         .fetch_one(&self.pool)
         .await?;
+        self.bust_tasks(Some(parent_id)).await;
         Ok(task)
     }
 
@@ -417,6 +478,7 @@ impl Database {
         .bind(metadata)
         .execute(&self.pool)
         .await?;
+        self.bust_task_logs(task_id).await;
         Ok(())
     }
 
@@ -524,6 +586,7 @@ impl Database {
         .bind(model)
         .fetch_one(&self.pool)
         .await?;
+        self.bust_schedules(None).await;
         Ok(row)
     }
 
@@ -588,6 +651,9 @@ impl Database {
         query = query.bind(id).bind(user_id).bind(default_id);
 
         let result = query.execute(&self.pool).await?;
+        if result.rows_affected() > 0 {
+            self.bust_schedules(Some(id)).await;
+        }
         Ok(result.rows_affected())
     }
 
@@ -602,6 +668,9 @@ impl Database {
         .bind(default_id)
         .execute(&self.pool)
         .await?;
+        if result.rows_affected() > 0 {
+            self.bust_schedules(Some(id)).await;
+        }
         Ok(result.rows_affected())
     }
 
@@ -636,6 +705,7 @@ impl Database {
         .bind(schedule_id)
         .fetch_one(&self.pool)
         .await?;
+        self.bust_schedules(Some(schedule_id)).await;
         Ok(run)
     }
 
@@ -660,6 +730,12 @@ impl Database {
         .bind(run_id)
         .execute(&self.pool)
         .await?;
+        // We don't know schedule_id from run_id here; bust list + all runs caches.
+        self.bust_schedules(None).await;
+        if let Some(r) = &self.redis {
+            cache::invalidate_pattern(r, "cache:schedules:runs:*").await;
+        }
+        self.bust_schedule_run(run_id).await;
         Ok(())
     }
 
@@ -672,6 +748,7 @@ impl Database {
         .bind(message)
         .execute(&self.pool)
         .await?;
+        self.bust_schedule_run(run_id).await;
         Ok(())
     }
 
@@ -744,6 +821,7 @@ impl Database {
         .bind(model)
         .fetch_one(&self.pool)
         .await?;
+        self.bust_tasks(Some(task.id)).await;
         Ok(task)
     }
 
@@ -794,6 +872,7 @@ impl Database {
         .bind(branch)
         .fetch_one(&self.pool)
         .await?;
+        self.bust_repos().await;
         Ok(profile)
     }
 
@@ -803,6 +882,7 @@ impl Database {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        self.bust_repos().await;
         Ok(())
     }
 
@@ -828,6 +908,7 @@ impl Database {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        self.bust_repos().await;
         Ok(())
     }
 
@@ -839,6 +920,7 @@ impl Database {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        self.bust_repos().await;
         Ok(())
     }
 
@@ -870,6 +952,7 @@ impl Database {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        self.bust_repos().await;
         Ok(())
     }
 
@@ -878,6 +961,7 @@ impl Database {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        self.bust_repos().await;
         Ok(())
     }
 
@@ -886,6 +970,7 @@ impl Database {
             .bind(schedule_id)
             .execute(&self.pool)
             .await?;
+        self.bust_schedules(Some(schedule_id)).await;
         Ok(())
     }
 
@@ -982,6 +1067,7 @@ impl Database {
         .bind(enabled)
         .execute(&self.pool)
         .await?;
+        self.bust_schedules(None).await;
         Ok(())
     }
 }

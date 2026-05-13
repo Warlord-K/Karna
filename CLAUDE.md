@@ -474,6 +474,29 @@ EXPIRE task_lock:{task_id} 1800
 DEL task_lock:{task_id}
 ```
 
+## Redis Cache (read-through)
+
+To minimize Postgres egress, all GET endpoints in the Rust API are cached in Redis with a 10-minute TTL. Cache invalidation lives **inside `karna_shared::db::Database`** — every write method (`update_status`, `set_plan`, `insert_log`, `upsert_repo_profile`, …) busts the relevant cache keys automatically. Because both `karna-api` and `karna-agent` share the same `Database`, agent-side writes invalidate just like API-side writes.
+
+```
+cache:tasks:list:{user_id}              # GET /api/tasks
+cache:tasks:logs:{task_id}              # GET /api/tasks/{id}/logs
+cache:schedules:list:{user_id}          # GET /api/schedules
+cache:schedules:runs:{schedule_id}      # GET /api/schedules/{id}/runs
+cache:schedules:run_logs:{run_id}       # GET /api/schedules/{id}/runs/{run_id}/logs
+cache:repos:list                        # GET /api/repos
+cache:config                            # GET /api/config (also busted by repo writes)
+```
+
+Pattern invalidation (`cache:tasks:list:*`) is used for cross-user list caches since default-system-user rows are visible to everyone. Cache failures never fail the request — read-through falls back to Postgres, writes proceed without busting.
+
+**Wiring:** `Database::connect(url).await?.with_redis(redis.clone())` — without `with_redis`, the cache layer is silently disabled (useful for tests).
+
+**Key files:**
+- `shared/src/cache.rs` — `get_or_set`, `invalidate`, `invalidate_pattern`, key builders
+- `shared/src/db.rs` — `bust_tasks`/`bust_schedules`/`bust_repos`/`bust_task_logs`/`bust_schedule_run` called from every write method
+- `api/src/routes/{tasks,schedules,repos,config}.rs` — read-through wrappers
+
 ## Environment Variables
 
 All secrets live in `.env` (gitignored). User config lives in `config.yaml` (gitignored). Template lives in `config.example.yaml` (tracked).

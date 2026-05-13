@@ -74,7 +74,7 @@ impl TaskPriority {
     }
 }
 
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct AgentTask {
     pub id: Uuid,
@@ -167,7 +167,7 @@ impl AgentTask {
     }
 }
 
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct AgentLog {
     pub id: Uuid,
@@ -195,7 +195,7 @@ pub struct TaskAttachment {
 
 // --- Schedule models ---
 
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct Schedule {
     pub id: Uuid,
@@ -230,7 +230,7 @@ impl Schedule {
     }
 }
 
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct ScheduledRun {
     pub id: Uuid,
@@ -244,7 +244,7 @@ pub struct ScheduledRun {
     pub created_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct ScheduledRunLog {
     pub id: Uuid,
@@ -256,7 +256,7 @@ pub struct ScheduledRunLog {
 
 // --- Repo profile models ---
 
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct RepoProfile {
     pub id: Uuid,
     pub user_id: Uuid,

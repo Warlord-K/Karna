@@ -1,4 +1,5 @@
 use axum::{extract::State, http::StatusCode, Extension, Json};
+use karna_shared::cache;
 use serde_json::{json, Value};
 
 use crate::auth::UserId;
@@ -8,8 +9,24 @@ pub async fn get(
     State(state): State<AppState>,
     Extension(_user): Extension<UserId>,
 ) -> Result<Json<Value>, StatusCode> {
-    let config = &state.config;
+    let db = state.db.clone();
+    let config = state.config.clone();
+    let result = cache::get_or_set(
+        &state.redis,
+        cache::CONFIG_KEY,
+        cache::DEFAULT_TTL_SECS,
+        move || async move { build_config_response(&db, &config).await },
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    Ok(Json(result))
+}
+
+async fn build_config_response(
+    db: &karna_shared::db::Database,
+    config: &crate::ApiConfig,
+) -> anyhow::Result<Value> {
     // Start with config repos
     let mut seen = std::collections::HashSet::new();
     let mut repos: Vec<Value> = config
@@ -26,7 +43,7 @@ pub async fn get(
         .collect();
 
     // Merge in DB repos (added via UI) that aren't already in config
-    if let Ok(db_profiles) = state.db.get_all_repo_profiles().await {
+    if let Ok(db_profiles) = db.get_all_repo_profiles().await {
         for p in db_profiles {
             if seen.insert(p.repo.clone()) {
                 repos.push(json!({
@@ -49,7 +66,6 @@ pub async fn get(
         );
     }
 
-    // Fallback
     if backends.is_empty() {
         backends.insert(
             "claude".to_string(),
@@ -60,10 +76,10 @@ pub async fn get(
     let skills: Vec<&str> = config.skills.iter().map(|s| s.name.as_str()).collect();
     let mcp_servers: Vec<&str> = config.mcp_servers.iter().map(|s| s.name.as_str()).collect();
 
-    Ok(Json(json!({
+    Ok(json!({
         "repos": repos,
         "backends": backends,
         "skills": skills,
         "mcpServers": mcp_servers,
-    })))
+    }))
 }

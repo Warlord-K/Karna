@@ -1081,10 +1081,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "redis",
  "serde",
  "serde_json",
  "slug",
  "sqlx",
+ "tracing",
  "uuid",
 ]
 

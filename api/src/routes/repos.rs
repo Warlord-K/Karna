@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     Extension, Json,
 };
+use karna_shared::cache;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -14,11 +15,15 @@ pub async fn list(
     State(state): State<AppState>,
     Extension(_user): Extension<UserId>,
 ) -> Result<Json<Vec<karna_shared::models::RepoProfile>>, StatusCode> {
-    let repos = state
-        .db
-        .get_all_repo_profiles()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db = state.db.clone();
+    let repos = cache::get_or_set(
+        &state.redis,
+        cache::REPOS_LIST_KEY,
+        cache::DEFAULT_TTL_SECS,
+        move || async move { db.get_all_repo_profiles().await },
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(repos))
 }
 

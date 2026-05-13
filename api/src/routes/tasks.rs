@@ -7,6 +7,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use karna_shared::cache;
+
 use crate::auth::UserId;
 use crate::AppState;
 
@@ -26,11 +28,13 @@ pub async fn list(
     State(state): State<AppState>,
     Extension(user): Extension<UserId>,
 ) -> Result<Json<Vec<karna_shared::models::AgentTask>>, StatusCode> {
-    let tasks = state
-        .db
-        .list_tasks_for_user(user.0)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let key = cache::tasks_list_key(user.0);
+    let db = state.db.clone();
+    let tasks = cache::get_or_set(&state.redis, &key, cache::DEFAULT_TTL_SECS, move || async move {
+        db.list_tasks_for_user(user.0).await
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(tasks))
 }
 
@@ -107,11 +111,13 @@ pub async fn logs(
         return Err(StatusCode::NOT_FOUND);
     }
 
-    let logs = state
-        .db
-        .get_logs(id, 200)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let key = cache::tasks_logs_key(id);
+    let db = state.db.clone();
+    let logs = cache::get_or_set(&state.redis, &key, cache::DEFAULT_TTL_SECS, move || async move {
+        db.get_logs(id, 200).await
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(logs))
 }

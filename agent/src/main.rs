@@ -58,18 +58,19 @@ async fn main() -> anyhow::Result<()> {
     // Configure SSH commit signing (auto-detected from ./signing/ mount or explicit config)
     git::workspace::configure_git_signing(config.signing.as_ref()).await?;
 
-    // Connect to Postgres
-    let db = db::Database::connect(&config.database_url).await?;
-    info!("Connected to Postgres");
-
-    // Connect to Redis
+    // Connect to Redis (first, so we can attach it to Database)
     let redis = redis::Client::open(config.redis_url.as_str())?;
-    // Verify connection
     let mut conn = redis.get_multiplexed_async_connection().await?;
     redis::cmd("PING")
         .query_async::<String>(&mut conn)
         .await?;
     info!("Connected to Redis");
+
+    // Connect to Postgres with cache invalidation wired up
+    let db = db::Database::connect(&config.database_url)
+        .await?
+        .with_redis(redis.clone());
+    info!("Connected to Postgres");
 
     // Sync config-defined schedules to database
     match scheduler::sync_config_schedules(&config, &db).await {
