@@ -70,6 +70,22 @@ spec:
             - name: SIGNUP_DISABLED
               value: "true"
             {{- end }}
+            {{- if .Values.auth.google.enabled }}
+            - name: AUTH_GOOGLE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.google.existingSecret | default (include "karna.secretName" .) }}
+                  key: {{ .Values.auth.google.existingSecretClientIdKey | default "google-client-id" }}
+            - name: AUTH_GOOGLE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.google.existingSecret | default (include "karna.secretName" .) }}
+                  key: {{ .Values.auth.google.existingSecretClientSecretKey | default "google-client-secret" }}
+            {{- if .Values.auth.google.allowedEmailDomains }}
+            - name: AUTH_ALLOWED_EMAIL_DOMAINS
+              value: {{ .Values.auth.google.allowedEmailDomains | quote }}
+            {{- end }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /

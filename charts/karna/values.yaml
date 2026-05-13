@@ -142,6 +142,22 @@ auth:
   # Keys in existing secret
   existingSecretAuthKey: auth-secret
 
+  # Google OAuth (Auth.js). Set clientId + clientSecret to enable.
+  # Callback URL to register in Google Cloud Console:
+  #   {AUTH_URL}/api/auth/callback/google
+  # where AUTH_URL is derived from ingress.hosts[0].host.
+  google:
+    enabled: false
+    clientId: ""
+    clientSecret: ""
+    # Comma-separated email domain allowlist (e.g. "company.com,partner.com").
+    # Empty means any Google account can sign in — usually NOT what you want.
+    allowedEmailDomains: ""
+    # Reference an existing secret instead of inline values.
+    existingSecret: ""
+    existingSecretClientIdKey: google-client-id
+    existingSecretClientSecretKey: google-client-secret
+
 # -- GitHub
 github:
   token: ""

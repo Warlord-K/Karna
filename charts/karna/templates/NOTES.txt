@@ -64,3 +64,17 @@ Set github.token or github.existingSecret in your values.
 WARNING: No CLAUDE_CODE_OAUTH_TOKEN configured. The agent needs this to invoke Claude Code.
 Set claude.oauthToken or claude.existingSecret in your values.
 {{- end }}
+
+{{- if .Values.auth.google.enabled }}
+
+Google OAuth is enabled. Register this callback URL in Google Cloud Console
+(APIs & Services -> Credentials -> your OAuth 2.0 Client -> Authorized redirect URIs):
+
+  {{ include "karna.authUrl" . }}/api/auth/callback/google
+
+{{- if not .Values.auth.google.allowedEmailDomains }}
+
+WARNING: auth.google.allowedEmailDomains is empty. Any Google account can sign in.
+Set it to a comma-separated list (e.g. "company.com") to restrict access.
+{{- end }}
+{{- end }}

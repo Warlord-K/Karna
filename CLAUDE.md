@@ -515,6 +515,21 @@ All secrets live in `.env` (gitignored). User config lives in `config.yaml` (git
 | TUNNEL_AGENT_HOSTNAME | No | Hostname for agent API (CF tunnel); also webhook URL fallback |
 | AGENT_WEBHOOK_URL | No | Full URL override for webhook registration (e.g. ngrok URL) |
 | GITHUB_WEBHOOK_SECRET | No | HMAC-SHA256 secret for webhook signature verification |
+| AUTH_GOOGLE_ID | No | Google OAuth client ID; enables "Continue with Google" on login |
+| AUTH_GOOGLE_SECRET | No | Google OAuth client secret (required with AUTH_GOOGLE_ID) |
+| AUTH_ALLOWED_EMAIL_DOMAINS | No | Comma-separated email-domain allowlist for Google sign-in (e.g. `company.com,partner.com`) |
+
+### Google OAuth (Auth.js)
+
+Optional second provider alongside the default Credentials (email/password) flow. Set `AUTH_GOOGLE_ID` + `AUTH_GOOGLE_SECRET` and the login page renders a "Continue with Google" button. `AUTH_ALLOWED_EMAIL_DOMAINS` (comma-separated) gates which domains can sign in; leave empty to allow any Google account (not recommended).
+
+- Provider wiring lives in [frontend/auth.ts](frontend/auth.ts) (conditionally pushed into the providers array, plus a `signIn` callback that enforces the domain allowlist)
+- Login UI button in [frontend/app/login/login-form.tsx](frontend/app/login/login-form.tsx); page reads env via [frontend/app/login/page.tsx](frontend/app/login/page.tsx) and passes a `googleEnabled` prop
+- Callback URL to register in Google Cloud Console: `{AUTH_URL}/api/auth/callback/google`
+- First-time Google sign-in auto-creates a `users` row via `@auth/pg-adapter` (with no password — the Credentials provider rejects passwordless accounts, so Google-only users stay Google-only)
+- `allowDangerousEmailAccountLinking: true` lets an existing credentials account log in via Google with the same email (Google verifies email so this is safe)
+
+**Helm**: set `auth.google.enabled: true` and either inline `clientId`/`clientSecret` or reference `auth.google.existingSecret`. `auth.google.allowedEmailDomains` becomes `AUTH_ALLOWED_EMAIL_DOMAINS`. NOTES.txt prints the callback URL post-install.
 
 ## Code Server (Browser IDE)
 
