@@ -4,12 +4,12 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { useAuthDisabled } from '@/lib/auth-context';
-import { AgentTaskPriority, createTaskWithImages } from '@/lib/agent-tasks';
-import { useConfig, taskKeys } from '@/hooks/use-tasks';
+import { AgentTaskPriority, UserSummary, userDisplayName, createTaskWithImages } from '@/lib/agent-tasks';
+import { useConfig, useUsers, taskKeys } from '@/hooks/use-tasks';
 import { useQueryClient } from '@tanstack/react-query';
 import { MarkdownEditor, MarkdownEditorRef } from '@/components/agent/markdown-editor';
 import {
-  ArrowLeft, Stack, ImageSquare, Plus, X, CaretDown,
+  ArrowLeft, Stack, ImageSquare, Plus, X, CaretDown, Robot, User,
 } from '@phosphor-icons/react';
 import toast from 'react-hot-toast';
 
@@ -32,6 +32,7 @@ export default function NewTaskPage() {
   const { status: authStatus } = useSession();
   const isReady = authDisabled || authStatus === 'authenticated';
   const { data: config } = useConfig(isReady);
+  const { data: users = [] } = useUsers(isReady);
 
   const repos = config?.repos ?? [];
   const backends = config?.backends ?? {};
@@ -45,6 +46,8 @@ export default function NewTaskPage() {
   const [priority, setPriority] = useState<AgentTaskPriority>('medium');
   const [cli, setCli] = useState(defaultCli);
   const [model, setModel] = useState(defaultModel);
+  // null = agent picks up; otherwise UUID of a human user
+  const [assigneeUserId, setAssigneeUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [images, setImages] = useState<File[]>([]);
   const editorRef = useRef<MarkdownEditorRef>(null);
@@ -94,7 +97,15 @@ export default function NewTaskPage() {
     const desc = editorRef.current?.getMarkdown() || description;
     try {
       await createTaskWithImages(
-        { title: title.trim(), description: desc.trim(), repo: repo || null, priority, cli, model },
+        {
+          title: title.trim(),
+          description: desc.trim(),
+          repo: repo || null,
+          priority,
+          cli,
+          model,
+          assignee_user_id: assigneeUserId,
+        },
         images,
       );
       queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
@@ -230,6 +241,46 @@ export default function NewTaskPage() {
 
           {/* Config section */}
           <div className="border-t border-gray-3 pt-6">
+            {/* Assignee — agent (default) or a human */}
+            <div className="mb-5">
+              <label className={labelClass}>Assigned to</label>
+              <div className="flex gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setAssigneeUserId(null)}
+                  className={`flex-1 h-9 rounded-lg text-[13px] font-medium transition-all duration-150 border flex items-center justify-center gap-1.5 ${
+                    assigneeUserId === null
+                      ? 'bg-gray-3 border-gray-5 text-gray-12'
+                      : 'bg-transparent border-gray-4 text-gray-8 hover:text-gray-11 hover:bg-gray-3'
+                  }`}
+                >
+                  <Robot size={14} weight="bold" /> Agent
+                </button>
+                <div className="flex-1 relative">
+                  <select
+                    value={assigneeUserId ?? ''}
+                    onChange={(e) => setAssigneeUserId(e.target.value || null)}
+                    className={`w-full h-9 pl-3 pr-8 text-[13px] rounded-lg border cursor-pointer focus:outline-none appearance-none ${
+                      assigneeUserId !== null
+                        ? 'bg-gray-3 border-gray-5 text-gray-12'
+                        : 'bg-transparent border-gray-4 text-gray-8 hover:text-gray-11'
+                    }`}
+                  >
+                    <option value="">A human...</option>
+                    {users.map((u: UserSummary) => (
+                      <option key={u.id} value={u.id}>{userDisplayName(u)}</option>
+                    ))}
+                  </select>
+                  <CaretDown size={14} weight="bold" className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-7 pointer-events-none" />
+                </div>
+              </div>
+              {assigneeUserId && (
+                <p className="text-[11px] text-gray-7 mt-1.5 flex items-center gap-1">
+                  <User size={11} weight="bold" /> Agent will skip this task until reassigned
+                </p>
+              )}
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               {/* Repository */}
               <div>

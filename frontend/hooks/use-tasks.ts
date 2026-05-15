@@ -3,7 +3,9 @@ import {
   AgentTask,
   AgentLog,
   AgentTaskPriority,
+  UserSummary,
   fetchTasks,
+  fetchUsers,
   createTask,
   updateTask,
   deleteTask,
@@ -21,6 +23,7 @@ export const taskKeys = {
   subtasks: (taskId: string) => [...taskKeys.all, 'subtasks', taskId] as const,
   logs: (taskId: string) => [...taskKeys.all, 'logs', taskId] as const,
   config: ['config'] as const,
+  users: ['users'] as const,
 };
 
 interface AppConfig {
@@ -78,6 +81,15 @@ export function useLogs(taskId: string | null, poll: boolean) {
   });
 }
 
+export function useUsers(enabled: boolean = true) {
+  return useQuery<UserSummary[]>({
+    queryKey: taskKeys.users,
+    queryFn: ({ signal }) => fetchUsers(signal),
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
 export function useCreateTask() {
   const qc = useQueryClient();
   return useMutation({
@@ -88,6 +100,7 @@ export function useCreateTask() {
       priority: AgentTaskPriority;
       cli: string | null;
       model: string | null;
+      assignee_user_id?: string | null;
     }) => createTask(data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: taskKeys.lists() });

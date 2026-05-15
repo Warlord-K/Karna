@@ -10,6 +10,7 @@ mod cli;
 mod codex;
 mod config;
 mod db;
+mod external;
 mod git;
 mod models;
 mod notifications;

@@ -22,6 +22,12 @@ pub struct CreateTask {
     priority: Option<String>,
     cli: Option<String>,
     model: Option<String>,
+    /// User UUID. NULL = pick up by agent (existing behavior).
+    assignee_user_id: Option<Uuid>,
+    /// "linear" | "clickup" — only set when ingesting from an external system.
+    external_source: Option<String>,
+    external_id: Option<String>,
+    external_url: Option<String>,
 }
 
 pub async fn list(
@@ -50,7 +56,7 @@ pub async fn create(
 
     let task = state
         .db
-        .create_task(
+        .create_task_full(
             user.0,
             title,
             body.description.as_deref(),
@@ -58,6 +64,10 @@ pub async fn create(
             body.priority.as_deref().unwrap_or("medium"),
             body.cli.as_deref(),
             body.model.as_deref(),
+            body.assignee_user_id,
+            body.external_source.as_deref(),
+            body.external_id.as_deref(),
+            body.external_url.as_deref(),
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

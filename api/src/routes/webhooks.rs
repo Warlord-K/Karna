@@ -240,3 +240,325 @@ fn verify_signature(secret: Option<&str>, signature_header: Option<&str>, body: 
 
     computed == expected
 }
+
+/// Compare a raw hex HMAC-SHA256 (no "sha256=" prefix) — Linear & ClickUp format.
+fn verify_raw_hmac(secret: Option<&str>, signature_header: Option<&str>, body: &[u8]) -> bool {
+    let secret = match secret {
+        Some(s) => s,
+        None => return true, // No secret configured — accept all
+    };
+    let signature = match signature_header {
+        Some(s) => s,
+        None => {
+            warn!("Webhook missing signature header");
+            return false;
+        }
+    };
+
+    let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    mac.update(body);
+    let computed = hex::encode(mac.finalize().into_bytes());
+
+    // Linear sends the hex digest directly; tolerate "sha256=" prefix just in case.
+    let expected = signature.strip_prefix("sha256=").unwrap_or(signature);
+    computed == expected
+}
+
+// --- Linear ---
+//
+// Linear webhook payload (Issue create):
+// {
+//   "action": "create",
+//   "type": "Issue",
+//   "data": {
+//     "id": "uuid",
+//     "identifier": "ENG-123",
+//     "title": "...",
+//     "description": "...",
+//     "url": "https://linear.app/...",
+//     "team": { "key": "ENG" }
+//   }
+// }
+//
+// Signature: HMAC-SHA256 in `linear-signature` header (hex digest, no prefix).
+// Secret: LINEAR_WEBHOOK_SECRET env.
+pub async fn linear_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> StatusCode {
+    let secret = std::env::var("LINEAR_WEBHOOK_SECRET").ok();
+    let signature = headers.get("linear-signature").and_then(|v| v.to_str().ok());
+    if !verify_raw_hmac(secret.as_deref(), signature, body.as_bytes()) {
+        warn!("Linear webhook signature verification failed");
+        return StatusCode::UNAUTHORIZED;
+    }
+
+    let payload: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return StatusCode::BAD_REQUEST,
+    };
+
+    let action = payload["action"].as_str().unwrap_or("");
+    let entity_type = payload["type"].as_str().unwrap_or("");
+    if action != "create" || entity_type != "Issue" {
+        // Only ingest new issues for now — updates would require status mirroring.
+        return StatusCode::OK;
+    }
+
+    let data = match payload.get("data") {
+        Some(d) => d,
+        None => return StatusCode::BAD_REQUEST,
+    };
+
+    let external_id = data["id"].as_str().unwrap_or("");
+    if external_id.is_empty() {
+        return StatusCode::BAD_REQUEST;
+    }
+
+    if let Ok(Some(_)) = state.db.find_task_by_external("linear", external_id).await {
+        info!(external_id, "Linear: task already exists, skipping");
+        return StatusCode::OK;
+    }
+
+    let identifier = data["identifier"].as_str().unwrap_or("");
+    let raw_title = data["title"].as_str().unwrap_or("Untitled");
+    let title = if identifier.is_empty() {
+        raw_title.to_string()
+    } else {
+        format!("{}: {}", identifier, raw_title)
+    };
+    let description = data["description"].as_str().unwrap_or("");
+    let url = data["url"].as_str().unwrap_or("");
+    let priority = linear_priority(data["priority"].as_i64());
+
+    let user_id = match state.db.first_user_id().await {
+        Ok(Some(id)) => id,
+        _ => {
+            warn!("Linear webhook: no user found to assign task");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
+    match state
+        .db
+        .create_task_full(
+            user_id,
+            &title,
+            if description.is_empty() { None } else { Some(description) },
+            None, // repo — let the agent figure it out
+            priority,
+            None,
+            None,
+            None, // assignee — default to agent
+            Some("linear"),
+            Some(external_id),
+            if url.is_empty() { None } else { Some(url) },
+        )
+        .await
+    {
+        Ok(task) => {
+            info!(task_id = %task.id, external_id, "Linear: task ingested");
+            let _ = state
+                .db
+                .insert_log(
+                    task.id,
+                    "webhook",
+                    &format!("Ingested from Linear: {}", url),
+                    "info",
+                    None,
+                )
+                .await;
+            StatusCode::OK
+        }
+        Err(e) => {
+            warn!(error = %e, "Linear: failed to create task");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+fn linear_priority(p: Option<i64>) -> &'static str {
+    // Linear priority: 0 none, 1 urgent, 2 high, 3 medium, 4 low
+    match p.unwrap_or(0) {
+        1 => "urgent",
+        2 => "high",
+        4 => "low",
+        _ => "medium",
+    }
+}
+
+// --- ClickUp ---
+//
+// ClickUp webhook signs each request with HMAC-SHA256 of the body using the
+// webhook's secret, sent in `x-signature` header (raw hex).
+//
+// Payload for `taskCreated` is sparse (typically just task_id + history_items).
+// When CLICKUP_API_TOKEN is configured we fetch the full task to enrich title,
+// description, priority, and URL. Without it we fall back to whatever the
+// payload contains, finally to a "ClickUp task <id>" placeholder.
+pub async fn clickup_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> StatusCode {
+    let secret = std::env::var("CLICKUP_WEBHOOK_SECRET").ok();
+    let signature = headers.get("x-signature").and_then(|v| v.to_str().ok());
+    if !verify_raw_hmac(secret.as_deref(), signature, body.as_bytes()) {
+        warn!("ClickUp webhook signature verification failed");
+        return StatusCode::UNAUTHORIZED;
+    }
+
+    let payload: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return StatusCode::BAD_REQUEST,
+    };
+
+    let event = payload["event"].as_str().unwrap_or("");
+    if event != "taskCreated" {
+        return StatusCode::OK;
+    }
+
+    let task_id = payload["task_id"].as_str().unwrap_or("");
+    if task_id.is_empty() {
+        return StatusCode::BAD_REQUEST;
+    }
+
+    if let Ok(Some(_)) = state.db.find_task_by_external("clickup", task_id).await {
+        info!(task_id, "ClickUp: task already exists, skipping");
+        return StatusCode::OK;
+    }
+
+    // Prefer enriched details from the API; fall back to webhook payload.
+    let fetched = match fetch_clickup_task(task_id).await {
+        Ok(Some(t)) => Some(t),
+        Ok(None) => None, // no API token configured
+        Err(e) => {
+            warn!(task_id, error = %e, "ClickUp: enrichment failed, falling back to payload");
+            None
+        }
+    };
+
+    let payload_title = payload
+        .pointer("/task/name")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            payload["history_items"]
+                .as_array()
+                .and_then(|items| items.iter().find(|h| h["field"] == "name"))
+                .and_then(|h| h["after"].as_str())
+        });
+
+    let title = fetched
+        .as_ref()
+        .and_then(|t| t["name"].as_str())
+        .or(payload_title)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("ClickUp task {}", task_id));
+
+    let description = fetched.as_ref().and_then(|t| {
+        // ClickUp returns markdown_description on most endpoints; fall back to text_content.
+        t["markdown_description"]
+            .as_str()
+            .or_else(|| t["description"].as_str())
+            .or_else(|| t["text_content"].as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    });
+
+    let external_url = fetched
+        .as_ref()
+        .and_then(|t| t["url"].as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("https://app.clickup.com/t/{}", task_id));
+
+    let priority = fetched
+        .as_ref()
+        .and_then(|t| t["priority"].pointer("/priority"))
+        .and_then(|v| v.as_str())
+        .map(clickup_priority)
+        .unwrap_or("medium");
+
+    let user_id = match state.db.first_user_id().await {
+        Ok(Some(id)) => id,
+        _ => {
+            warn!("ClickUp webhook: no user found to assign task");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
+    match state
+        .db
+        .create_task_full(
+            user_id,
+            &title,
+            description.as_deref(),
+            None,
+            priority,
+            None,
+            None,
+            None,
+            Some("clickup"),
+            Some(task_id),
+            Some(&external_url),
+        )
+        .await
+    {
+        Ok(task) => {
+            info!(task_id_db = %task.id, task_id, enriched = fetched.is_some(), "ClickUp: task ingested");
+            let _ = state
+                .db
+                .insert_log(
+                    task.id,
+                    "webhook",
+                    &format!("Ingested from ClickUp: {}", external_url),
+                    "info",
+                    None,
+                )
+                .await;
+            StatusCode::OK
+        }
+        Err(e) => {
+            warn!(error = %e, "ClickUp: failed to create task");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+/// Fetch a full task from ClickUp. Returns Ok(None) when CLICKUP_API_TOKEN is
+/// not configured, Ok(Some) on success, Err on transport or API failure.
+async fn fetch_clickup_task(task_id: &str) -> anyhow::Result<Option<serde_json::Value>> {
+    let Ok(api_token) = std::env::var("CLICKUP_API_TOKEN") else {
+        return Ok(None);
+    };
+
+    let url = format!("https://api.clickup.com/api/v2/task/{task_id}?include_markdown_description=true");
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .header("Authorization", api_token)
+        .header("Accept", "application/json")
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("ClickUp API returned {status}: {text}");
+    }
+    Ok(Some(resp.json::<serde_json::Value>().await?))
+}
+
+fn clickup_priority(p: &str) -> &'static str {
+    // ClickUp priority strings (case-insensitive): "urgent", "high", "normal", "low"
+    match p.to_ascii_lowercase().as_str() {
+        "urgent" => "urgent",
+        "high" => "high",
+        "low" => "low",
+        _ => "medium",
+    }
+}

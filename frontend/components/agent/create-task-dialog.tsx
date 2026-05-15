@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { AgentTaskPriority } from '@/lib/agent-tasks';
-import { X, Stack, ImageSquare, Plus } from '@phosphor-icons/react';
+import { AgentTaskPriority, UserSummary, userDisplayName } from '@/lib/agent-tasks';
+import { useUsers } from '@/hooks/use-tasks';
+import { X, Stack, ImageSquare, Plus, Robot, User } from '@phosphor-icons/react';
 import { MarkdownEditor, MarkdownEditorRef } from './markdown-editor';
 
 export interface BackendConfig {
@@ -22,6 +23,7 @@ interface CreateTaskDialogProps {
     priority: AgentTaskPriority;
     cli: string | null;
     model: string | null;
+    assignee_user_id: string | null;
   }, images: File[]) => Promise<void>;
 }
 
@@ -47,10 +49,14 @@ export function CreateTaskDialog({ open, onClose, repos, backends, onCreateTask 
   const [priority, setPriority] = useState<AgentTaskPriority>('medium');
   const [cli, setCli] = useState(defaultCli);
   const [model, setModel] = useState(defaultModel);
+  // null = agent picks up; otherwise UUID of a human user
+  const [assigneeUserId, setAssigneeUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [images, setImages] = useState<File[]>([]);
   const editorRef = useRef<MarkdownEditorRef>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { data: users = [] } = useUsers(open);
 
   const addImages = useCallback((files: File[]) => {
     const valid = files.filter(f => {
@@ -94,8 +100,17 @@ export function CreateTaskDialog({ open, onClose, repos, backends, onCreateTask 
     setLoading(true);
     const desc = editorRef.current?.getMarkdown() || description;
     try {
-      await onCreateTask({ title: title.trim(), description: desc.trim(), repo: repo || null, priority, cli, model }, images);
+      await onCreateTask({
+        title: title.trim(),
+        description: desc.trim(),
+        repo: repo || null,
+        priority,
+        cli,
+        model,
+        assignee_user_id: assigneeUserId,
+      }, images);
       setTitle(''); setDescription(''); setRepo(''); setPriority('medium'); setCli(defaultCli); setModel(defaultModel); setImages([]);
+      setAssigneeUserId(null);
       editorRef.current?.clear();
       onClose();
     } catch (error) { console.error(error); } finally { setLoading(false); }
@@ -211,6 +226,43 @@ export function CreateTaskDialog({ open, onClose, repos, backends, onCreateTask 
                   className="hidden"
                 />
               </div>
+            </div>
+
+            {/* Assignee — agent (default) or a human */}
+            <div>
+              <label className={labelClass}>Assigned to</label>
+              <div className="flex gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setAssigneeUserId(null)}
+                  className={`flex-1 h-10 sm:h-9 rounded-lg text-[13px] font-medium transition-all duration-150 border flex items-center justify-center gap-1.5 ${
+                    assigneeUserId === null
+                      ? 'bg-gray-3 border-gray-5 text-gray-12'
+                      : 'bg-transparent border-gray-4 text-gray-8 hover:text-gray-11 hover:bg-gray-3'
+                  }`}
+                >
+                  <Robot size={14} weight="bold" /> Agent
+                </button>
+                <select
+                  value={assigneeUserId ?? ''}
+                  onChange={(e) => setAssigneeUserId(e.target.value || null)}
+                  className={`flex-1 h-10 sm:h-9 px-3 text-[13px] rounded-lg border cursor-pointer focus:outline-none ${
+                    assigneeUserId !== null
+                      ? 'bg-gray-3 border-gray-5 text-gray-12'
+                      : 'bg-transparent border-gray-4 text-gray-8 hover:text-gray-11'
+                  }`}
+                >
+                  <option value="">A human...</option>
+                  {users.map((u: UserSummary) => (
+                    <option key={u.id} value={u.id}>{userDisplayName(u)}</option>
+                  ))}
+                </select>
+              </div>
+              {assigneeUserId && (
+                <p className="text-[11px] text-gray-7 mt-1.5 flex items-center gap-1">
+                  <User size={11} weight="bold" /> Agent will skip this task
+                </p>
+              )}
             </div>
 
             {/* Config row */}

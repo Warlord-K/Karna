@@ -14,6 +14,8 @@ export interface TaskAttachment {
 export interface AgentTask {
   id: string;
   user_id: string;
+  /** NULL = agent picks up. Set = assigned to a specific human (agent skips). */
+  assignee_user_id: string | null;
   task_number: number;
   title: string;
   description: string | null;
@@ -33,6 +35,10 @@ export interface AgentTask {
   model: string | null;
   cost_usd: number;
   parent_task_id: string | null;
+  /** "linear" | "clickup" — origin of an ingested task. */
+  external_source: string | null;
+  external_id: string | null;
+  external_url: string | null;
   created_at: string;
   updated_at: string;
   started_at: string | null;
@@ -41,6 +47,16 @@ export interface AgentTask {
   subtasks?: AgentTask[];
   subtask_count?: number;
   subtask_done_count?: number;
+}
+
+export interface UserSummary {
+  id: string;
+  name: string | null;
+  email: string | null;
+}
+
+export function userDisplayName(u: UserSummary): string {
+  return u.name?.trim() || u.email?.trim() || u.id.slice(0, 8);
 }
 
 export interface AgentLog {
@@ -106,6 +122,12 @@ export async function fetchTasks(signal?: AbortSignal): Promise<AgentTask[]> {
   return res.json();
 }
 
+export async function fetchUsers(signal?: AbortSignal): Promise<UserSummary[]> {
+  const res = await fetch('/api/users', { signal });
+  if (!res.ok) throw new Error('Failed to fetch users');
+  return res.json();
+}
+
 export async function createTask(data: {
   title: string;
   description: string;
@@ -113,6 +135,7 @@ export async function createTask(data: {
   priority: AgentTaskPriority;
   cli: string | null;
   model: string | null;
+  assignee_user_id?: string | null;
 }): Promise<AgentTask> {
   const res = await fetch(API_BASE, {
     method: 'POST',
@@ -270,6 +293,7 @@ export async function createTaskWithImages(
     priority: AgentTaskPriority;
     cli: string | null;
     model: string | null;
+    assignee_user_id?: string | null;
   },
   images: File[],
 ): Promise<AgentTask> {

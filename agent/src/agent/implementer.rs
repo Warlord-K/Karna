@@ -4,6 +4,7 @@ use tracing::info;
 use crate::cli::{self, CliOptions};
 use crate::config::Config;
 use crate::db::Database;
+use crate::external;
 use crate::git::{github, workspace};
 use crate::models::AgentTask;
 
@@ -187,6 +188,7 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
 
         db.set_pr(task.id, &pr.url, pr.number).await?;
         db.insert_log(task.id, "git", &format!("PR opened: {}", pr.url), "info", None).await?;
+        external::notify_pr_opened(task, &pr.url).await;
         any_pr_created = true;
     }
 

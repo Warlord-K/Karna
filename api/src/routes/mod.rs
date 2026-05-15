@@ -2,4 +2,5 @@ pub mod config;
 pub mod repos;
 pub mod schedules;
 pub mod tasks;
+pub mod users;
 pub mod webhooks;

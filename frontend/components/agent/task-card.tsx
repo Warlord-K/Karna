@@ -1,7 +1,7 @@
 'use client';
 
 import { AgentTask, PRIORITY_COLORS, getTaskLabel, getTaskTitle } from '@/lib/agent-tasks';
-import { GitPullRequest, WarningCircle, Lightning, Stack, Clock } from '@phosphor-icons/react';
+import { GitPullRequest, WarningCircle, Lightning, Stack, Clock, User } from '@phosphor-icons/react';
 import { formatDistanceToNow } from 'date-fns';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -97,9 +97,34 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
           {formatDistanceToNow(new Date(task.created_at), { addSuffix: false })}
         </span>
 
+        {task.assignee_user_id && (
+          <span
+            title="Assigned to a human"
+            className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 h-4 rounded-sm bg-blue-500/15 border border-blue-500/30 text-blue-400 flex-shrink-0"
+          >
+            <User size={10} weight="bold" /> Human
+          </span>
+        )}
+        {task.external_source && (
+          task.external_url ? (
+            <a
+              href={task.external_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`From ${task.external_source}`}
+              onClick={(e) => e.stopPropagation()}
+              className="text-[10px] font-mono text-gray-7 hover:text-gray-11 transition-colors flex-shrink-0"
+            >
+              {task.external_source}
+            </a>
+          ) : (
+            <span className="text-[10px] font-mono text-gray-7 flex-shrink-0">{task.external_source}</span>
+          )
+        )}
+
         {task.pr_url && <GitPullRequest size={14} weight="bold" className="text-gray-8 flex-shrink-0" />}
         {task.status === 'failed' && <WarningCircle size={14} weight="fill" className="text-red-400 flex-shrink-0" />}
-        {(task.status === 'planning' || task.status === 'in_progress') && !hasSubtasks && (
+        {(task.status === 'planning' || task.status === 'in_progress') && !hasSubtasks && !task.assignee_user_id && (
           <Lightning size={14} weight="fill" className="text-sun-9 flex-shrink-0 animate-lightning" />
         )}
       </div>

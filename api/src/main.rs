@@ -84,6 +84,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/repos", get(routes::repos::list).post(routes::repos::add))
         .route("/repos/{id}", patch(routes::repos::update).delete(routes::repos::delete))
         .route("/repos/{id}/onboard", post(routes::repos::trigger_onboard))
+        // Users (for assignee dropdown)
+        .route("/users", get(routes::users::list))
         // Config
         .route("/config", get(routes::config::get))
         // Auth middleware on all routes
@@ -92,6 +94,8 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/webhooks/github", post(routes::webhooks::github_webhook))
+        .route("/webhooks/linear", post(routes::webhooks::linear_webhook))
+        .route("/webhooks/clickup", post(routes::webhooks::clickup_webhook))
         .nest("/api", api)
         .layer(cors)
         .with_state(state);

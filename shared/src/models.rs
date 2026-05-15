@@ -79,6 +79,8 @@ impl TaskPriority {
 pub struct AgentTask {
     pub id: Uuid,
     pub user_id: Uuid,
+    /// NULL = picked up by the agent; set = assigned to a specific human, agent skips.
+    pub assignee_user_id: Option<Uuid>,
     pub title: String,
     pub description: Option<String>,
     pub repo: Option<String>,
@@ -98,6 +100,10 @@ pub struct AgentTask {
     pub model: Option<String>,
     pub task_number: Option<i32>,
     pub cost_usd: f64,
+    /// Origin system if ingested from outside (e.g. "linear", "clickup").
+    pub external_source: Option<String>,
+    pub external_id: Option<String>,
+    pub external_url: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,

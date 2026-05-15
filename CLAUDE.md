@@ -80,7 +80,10 @@ karna/
 │   ├── 008_comment_log_type.sql # Comment log type
 │   ├── 009_schedules.sql        # schedules + scheduled_runs + scheduled_run_logs
 │   ├── 010_repo_profiles.sql    # Repo profiles for auto-discovery + smart planning
-│   └── 011_cancelled_status.sql # Cancelled task status
+│   ├── 011_cancelled_status.sql # Cancelled task status
+│   ├── 012_task_attachments.sql # Task image attachments
+│   ├── 013_repo_sync_issues.sql # Per-repo GitHub issue sync toggle
+│   └── 014_assignee_and_external.sql # Human assignment + Linear/ClickUp source fields
 ├── Cargo.toml                   # Workspace root (members: agent, api, shared)
 ├── shared/
 │   ├── Cargo.toml
@@ -99,6 +102,8 @@ karna/
 │           ├── tasks.rs         # CRUD, logs, comments, subtasks
 │           ├── schedules.rs     # CRUD, trigger, runs, run logs
 │           ├── repos.rs         # List, add, delete, onboard
+│           ├── users.rs         # List users (for assignee dropdown)
+│           ├── webhooks.rs      # GitHub + Linear + ClickUp webhook handlers
 │           └── config.rs        # Config endpoint
 ├── agent/
 │   ├── Cargo.toml
@@ -162,6 +167,10 @@ karna/
   - `repo` (TEXT, nullable) — NULL for multi-repo parent tasks; subtasks carry the repo
   - `cli` (TEXT, nullable) — CLI backend ("claude", "codex"); NULL = config default
   - `model` (TEXT, nullable) — Model name ("sonnet", "gpt-5.4"); NULL = backend default
+  - `assignee_user_id` (UUID, nullable) — NULL = agent picks up; set = assigned to a human (agent skips)
+  - `external_source` (TEXT, nullable) — origin if ingested ("linear" or "clickup")
+  - `external_id` (TEXT, nullable) — ID in the external system (unique with source)
+  - `external_url` (TEXT, nullable) — direct link to the external task
 - `agent_logs` — Append-only agent activity log per task (includes user comments with `log_type = 'comment'`)
 
 ### Schedule tables
@@ -270,6 +279,7 @@ All data routes are served by the Rust API (`api/`). The frontend proxies `/api/
 | POST | /api/repos | Add new repo (triggers onboarding) |
 | DELETE | /api/repos/{id} | Delete repo profile |
 | POST | /api/repos/{id}/onboard | Trigger re-onboarding for a repo |
+| GET | /api/users | List users (id, name, email) for assignee dropdown |
 | GET | /api/config | Config (repos, backends, skills, MCP servers) |
 
 **Frontend (Next.js, :3000) — auth only:**
@@ -414,6 +424,48 @@ DB-backed schedules that run prompts on a cron or one-shot basis, explore repos 
 - `schedule_lock:{schedule_id}` — Prevents duplicate execution across workers (30min TTL)
 - `schedule_trigger:{schedule_id}` — Manual trigger from frontend "Run Now" button (5min TTL)
 
+## Task Assignment (Agent vs Human)
+
+Every task has an `assignee_user_id`. NULL = the agent picks it up (default, original behavior). Set to a user UUID = the task belongs to that human, and the agent must skip it.
+
+**Where the filter lives:** `next_actionable_task()`, `active_task_ids()`, and `tasks_with_pending_feedback()` in [shared/src/db.rs](shared/src/db.rs) all add `AND assignee_user_id IS NULL`. No code in `agent/` needs to know about assignees — the DB filter is the single gate.
+
+**UI:**
+- Create dialog: "Assigned to" picker — toggle between "Agent" and a human dropdown ([tasks/new/page.tsx](frontend/app/(dashboard)/tasks/new/page.tsx))
+- Task card: blue "Human" badge when assigned ([components/agent/task-card.tsx](frontend/components/agent/task-card.tsx))
+- Task detail modal: editable assignee selector in the Details tab; reassign back to Agent at any time to resume agent work
+
+**User list source:** `GET /api/users` (filters out the default system user — that ID represents "no human", not a person).
+
+## External Task Sources (Linear / ClickUp Ingest)
+
+Tasks can be ingested from Linear or ClickUp via webhooks. Each task records its origin in `external_source` / `external_id` / `external_url`. When the agent opens a PR, it posts a backlink onto the external task so the source system stays in sync.
+
+### Webhooks
+
+| Source | Endpoint | Header | Secret env | Event handled |
+|--------|----------|--------|-----------|---------------|
+| Linear | `POST /webhooks/linear` | `linear-signature` (hex HMAC-SHA256) | `LINEAR_WEBHOOK_SECRET` | `action: create, type: Issue` |
+| ClickUp | `POST /webhooks/clickup` | `x-signature` (hex HMAC-SHA256) | `CLICKUP_WEBHOOK_SECRET` | `event: taskCreated` |
+
+Both use HMAC-SHA256 against the raw body (no `sha256=` prefix, unlike GitHub). If the corresponding secret env is unset, signatures are accepted without verification (useful for local testing).
+
+**Dedupe:** `find_task_by_external(source, external_id)` is called before creating a task. The `(external_source, external_id)` unique index in migration 014 backs this.
+
+**Linear payload** is rich enough to populate title, description, priority, and URL directly.
+
+**ClickUp payload** is sparse (just `task_id` + `history_items`). When `CLICKUP_API_TOKEN` is set, the handler calls `GET /api/v2/task/{id}?include_markdown_description=true` to enrich title, markdown description, URL, and priority. Without the token, it falls back to whatever the payload contains (`history_items` may include a "name" entry), and finally to a `ClickUp task <id>` placeholder.
+
+### PR Backlinks (Agent → Linear/ClickUp)
+
+When `set_pr()` fires, the agent calls `external::notify_pr_opened()` ([agent/src/external.rs](agent/src/external.rs)). If the task has an `external_source`, the agent posts a comment with the PR URL on the originating Linear issue / ClickUp task.
+
+**API tokens required:**
+- `LINEAR_API_KEY` — used against `https://api.linear.app/graphql` (`commentCreate` mutation)
+- `CLICKUP_API_TOKEN` — used against `https://api.clickup.com/api/v2/task/{id}/comment`
+
+If the token is missing, the agent logs a debug-level message and continues. Backlink failures never fail the PR.
+
 ## GitHub Webhooks (PR Feedback)
 
 The agent receives PR feedback from GitHub via webhooks — it does **not** poll GitHub for reviews.
@@ -515,6 +567,10 @@ All secrets live in `.env` (gitignored). User config lives in `config.yaml` (git
 | TUNNEL_AGENT_HOSTNAME | No | Hostname for agent API (CF tunnel); also webhook URL fallback |
 | AGENT_WEBHOOK_URL | No | Full URL override for webhook registration (e.g. ngrok URL) |
 | GITHUB_WEBHOOK_SECRET | No | HMAC-SHA256 secret for webhook signature verification |
+| LINEAR_WEBHOOK_SECRET | No | HMAC-SHA256 secret for `/webhooks/linear` |
+| LINEAR_API_KEY | No | Posts PR backlink comments onto Linear issues |
+| CLICKUP_WEBHOOK_SECRET | No | HMAC-SHA256 secret for `/webhooks/clickup` |
+| CLICKUP_API_TOKEN | No | Posts PR backlink comments onto ClickUp tasks |
 | AUTH_GOOGLE_ID | No | Google OAuth client ID; enables "Continue with Google" on login |
 | AUTH_GOOGLE_SECRET | No | Google OAuth client secret (required with AUTH_GOOGLE_ID) |
 | AUTH_ALLOWED_EMAIL_DOMAINS | No | Comma-separated email-domain allowlist for Google sign-in (e.g. `company.com,partner.com`) |

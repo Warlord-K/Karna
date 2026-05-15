@@ -6,21 +6,24 @@ import {
   AgentLog,
   AgentTaskPriority,
   AgentTaskStatus,
+  UserSummary,
   PRIORITY_COLORS,
   hasSubtaskDefinitions,
   getTaskLabel,
   getTaskTitle,
+  userDisplayName,
 } from '@/lib/agent-tasks';
 import {
   useSubtasks,
   useLogs,
   useApproveWithSubtasks,
   usePostComment,
+  useUsers,
 } from '@/hooks/use-tasks';
 import {
   Trash, GitPullRequest, ArrowSquareOut, Check, X, Prohibit,
   ChatText, Article, FileText, Lightning, WarningCircle, ArrowCounterClockwise,
-  Clock, Stack, Terminal,
+  Clock, Stack, Terminal, Robot, User,
 } from '@phosphor-icons/react';
 import toast from 'react-hot-toast';
 import { MarkdownEditor } from './markdown-editor';
@@ -60,6 +63,7 @@ export function TaskDetailModal({ task, onClose, onUpdate, onDelete }: TaskDetai
 
   const { data: subtasks = [] } = useSubtasks(taskId, activeTab === 'subtasks');
   const { data: logs = [], isLoading: logsLoading } = useLogs(taskId, activeTab === 'activity');
+  const { data: users = [] } = useUsers(!!task);
   const approveSubtasksMutation = useApproveWithSubtasks();
   const postCommentMutation = usePostComment();
 
@@ -70,6 +74,10 @@ export function TaskDetailModal({ task, onClose, onUpdate, onDelete }: TaskDetai
   if (!task) return null;
 
   const handlePriorityChange = async (p: AgentTaskPriority) => { await onUpdate(task.id, { priority: p }); };
+  const handleAssigneeChange = async (assigneeUserId: string | null) => {
+    await onUpdate(task.id, { assignee_user_id: assigneeUserId });
+    toast.success(assigneeUserId ? 'Assigned to human' : 'Handed back to agent');
+  };
 
   const handleApprovePlan = async () => {
     setLoading(true);
@@ -238,6 +246,58 @@ export function TaskDetailModal({ task, onClose, onUpdate, onDelete }: TaskDetai
                 taskId={task.id}
                 editable={['todo', 'plan_review', 'planning'].includes(task.status)}
               />
+
+              {/* Assignee */}
+              <div className="flex items-center gap-2.5 pt-4 border-t border-gray-3">
+                {task.assignee_user_id ? <User size={14} weight="bold" className="text-blue-400" /> : <Robot size={14} weight="bold" className="text-gray-8" />}
+                <span className="text-[13px] text-gray-9 font-medium">Assigned to</span>
+                <div className="flex gap-1.5 ml-auto">
+                  <button
+                    type="button"
+                    onClick={() => handleAssigneeChange(null)}
+                    className={`h-7 px-2.5 rounded-md text-[12px] font-medium transition-all duration-150 border flex items-center gap-1 ${
+                      !task.assignee_user_id
+                        ? 'bg-gray-3 border-gray-5 text-gray-12'
+                        : 'bg-transparent border-gray-4 text-gray-8 hover:text-gray-11 hover:bg-gray-3'
+                    }`}
+                  >
+                    <Robot size={12} weight="bold" /> Agent
+                  </button>
+                  <select
+                    value={task.assignee_user_id ?? ''}
+                    onChange={(e) => handleAssigneeChange(e.target.value || null)}
+                    className={`h-7 px-2 rounded-md text-[12px] border cursor-pointer focus:outline-none ${
+                      task.assignee_user_id
+                        ? 'bg-gray-3 border-gray-5 text-gray-12'
+                        : 'bg-transparent border-gray-4 text-gray-8 hover:text-gray-11'
+                    }`}
+                  >
+                    <option value="">A human...</option>
+                    {users.map((u: UserSummary) => (
+                      <option key={u.id} value={u.id}>{userDisplayName(u)}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* External source */}
+              {task.external_source && (
+                <div className="flex items-center gap-2.5">
+                  <ArrowSquareOut size={14} weight="bold" className="text-gray-8" />
+                  <span className="text-[13px] text-gray-9 font-medium capitalize">{task.external_source}</span>
+                  {task.external_id && <span className="text-[13px] text-gray-8 font-mono">{task.external_id}</span>}
+                  {task.external_url && (
+                    <a
+                      href={task.external_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[13px] text-blue-400 hover:text-blue-300 ml-auto flex items-center gap-1 transition-colors"
+                    >
+                      Open <ArrowSquareOut size={12} weight="bold" />
+                    </a>
+                  )}
+                </div>
+              )}
 
               {task.error_message && (
                 <div className="flex items-start gap-3 p-4 rounded-lg bg-red-500/8 border border-red-500/15">

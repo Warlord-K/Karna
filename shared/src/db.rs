@@ -70,6 +70,7 @@ impl Database {
         let task = sqlx::query_as::<_, AgentTask>(
             r#"SELECT t.* FROM agent_tasks t
                WHERE t.status IN ('todo', 'planning', 'in_progress')
+               AND t.assignee_user_id IS NULL
                AND NOT EXISTS (
                  SELECT 1 FROM agent_tasks sub WHERE sub.parent_task_id = t.id
                )
@@ -87,6 +88,7 @@ impl Database {
         let rows = sqlx::query_scalar::<_, Uuid>(
             r#"SELECT t.id FROM agent_tasks t
                WHERE t.status IN ('planning', 'in_progress')
+               AND t.assignee_user_id IS NULL
                AND NOT EXISTS (
                  SELECT 1 FROM agent_tasks sub WHERE sub.parent_task_id = t.id
                )"#,
@@ -101,6 +103,7 @@ impl Database {
             r#"SELECT * FROM agent_tasks
                WHERE status IN ('review', 'plan_review')
                AND feedback IS NOT NULL AND feedback != ''
+               AND assignee_user_id IS NULL
                ORDER BY updated_at ASC"#,
         )
         .fetch_all(&self.pool)
@@ -147,9 +150,35 @@ impl Database {
         cli: Option<&str>,
         model: Option<&str>,
     ) -> Result<AgentTask> {
+        self.create_task_full(
+            user_id, title, description, repo, priority, cli, model,
+            None, None, None, None,
+        )
+        .await
+    }
+
+    /// Create a task with optional assignee and external-source metadata.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_task_full(
+        &self,
+        user_id: Uuid,
+        title: &str,
+        description: Option<&str>,
+        repo: Option<&str>,
+        priority: &str,
+        cli: Option<&str>,
+        model: Option<&str>,
+        assignee_user_id: Option<Uuid>,
+        external_source: Option<&str>,
+        external_id: Option<&str>,
+        external_url: Option<&str>,
+    ) -> Result<AgentTask> {
         let task = sqlx::query_as::<_, AgentTask>(
-            r#"INSERT INTO agent_tasks (user_id, title, description, repo, priority, position, cli, model)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            r#"INSERT INTO agent_tasks (
+                 user_id, title, description, repo, priority, position, cli, model,
+                 assignee_user_id, external_source, external_id, external_url
+               )
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                RETURNING *"#,
         )
         .bind(user_id)
@@ -160,6 +189,10 @@ impl Database {
         .bind(Utc::now().timestamp_millis() as f64)
         .bind(cli)
         .bind(model)
+        .bind(assignee_user_id)
+        .bind(external_source)
+        .bind(external_id)
+        .bind(external_url)
         .fetch_one(&self.pool)
         .await?;
         self.bust_tasks(Some(task.id)).await;
@@ -177,6 +210,7 @@ impl Database {
             "title", "description", "repo", "target_branch", "status", "priority",
             "position", "branch", "pr_url", "pr_number", "plan_content", "feedback",
             "agent_session_id", "error_message", "cli", "model",
+            "assignee_user_id", "external_source", "external_id", "external_url",
         ];
 
         let mut set_clauses = Vec::new();
@@ -997,6 +1031,37 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
         Ok(logs)
+    }
+
+    /// All users, lightest shape needed for the assignee dropdown.
+    /// Filters out the synthetic default-system user — it represents "no human", not a person.
+    pub async fn list_users(&self) -> Result<Vec<(Uuid, Option<String>, Option<String>)>> {
+        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
+        let rows = sqlx::query_as::<_, (Uuid, Option<String>, Option<String>)>(
+            r#"SELECT id, name, email FROM users
+               WHERE id <> $1
+               ORDER BY COALESCE(name, email, '') ASC"#,
+        )
+        .bind(default_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Lookup an existing task by its origin in Linear/ClickUp — used for webhook dedupe.
+    pub async fn find_task_by_external(
+        &self,
+        source: &str,
+        external_id: &str,
+    ) -> Result<Option<AgentTask>> {
+        let task = sqlx::query_as::<_, AgentTask>(
+            "SELECT * FROM agent_tasks WHERE external_source = $1 AND external_id = $2 LIMIT 1",
+        )
+        .bind(source)
+        .bind(external_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(task)
     }
 
     pub async fn first_user_id(&self) -> Result<Option<Uuid>> {

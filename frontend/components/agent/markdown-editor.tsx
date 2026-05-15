@@ -7,7 +7,7 @@ import Placeholder from '@tiptap/extension-placeholder';
 import { Markdown } from 'tiptap-markdown';
 import { useRef, useEffect, useImperativeHandle, forwardRef, useCallback } from 'react';
 import {
-  TextBolder, TextItalic, TextStrikethrough, Code, CodeBlock,
+  TextB, TextItalic, TextStrikethrough, Code, CodeBlock,
   ListBullets, ListNumbers, Quotes, LineSegment, TextHOne, TextHTwo, TextHThree,
 } from '@phosphor-icons/react';
 
@@ -80,7 +80,7 @@ function EditorToolbar({ editor }: { editor: Editor }) {
       <div className="w-px h-4 bg-gray-5 mx-1" />
 
       <ToolbarButton title="Bold" active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()}>
-        <TextBolder size={15} weight="bold" />
+        <TextB size={15} weight="bold" />
       </ToolbarButton>
       <ToolbarButton title="Italic" active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()}>
         <TextItalic size={15} weight="bold" />
