@@ -1,22 +1,20 @@
 # syntax=docker/dockerfile:1
-FROM rust:1.88-slim-bookworm AS builder
+FROM rust:1.88-slim-bookworm AS chef
 WORKDIR /build
-RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && cargo install cargo-chef --locked
 
-# Copy full workspace source
-COPY Cargo.toml Cargo.lock ./
-COPY shared/ shared/
-COPY agent/ agent/
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
 
-# API stub (workspace member must exist but we don't need its real source)
-COPY api/Cargo.toml api/Cargo.toml
-RUN mkdir -p api/src && echo "fn main() {}" > api/src/main.rs
-
-# Build with cache mounts — persists cargo registry + target dir across builds.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/target \
-    cargo build --release -p karna-agent \
+FROM chef AS builder
+COPY --from=planner /build/recipe.json recipe.json
+# Compile dependencies — cached layer (keyed on recipe.json = Cargo.toml/Cargo.lock).
+RUN cargo chef cook --release --recipe-path recipe.json -p karna-agent
+COPY . .
+RUN cargo build --release -p karna-agent \
     && cp target/release/karna-agent /karna-agent
 
 # Runtime image

@@ -1,0 +1,39 @@
+# VCS
+.git
+.gitignore
+
+# Rust build artifacts (local — Docker should compile fresh)
+target
+**/target
+
+# Node
+frontend/node_modules
+frontend/.next
+frontend/out
+**/node_modules
+
+# Editor / OS
+.DS_Store
+.idea
+.vscode
+
+# Local config / secrets
+.env
+.env.*
+!.env.example
+config.yaml
+signing/
+
+# Test / coverage
+coverage
+**/*.log
+
+# Docker
+Dockerfile
+**/Dockerfile
+docker-compose*.yml
+
+# CI / docs that aren't needed in build context
+.github
+charts
+k8s
