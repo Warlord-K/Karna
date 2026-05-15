@@ -22,6 +22,9 @@ api:
     maxReplicas: 5
     targetCPUUtilization: 70
   podAnnotations: {}
+  # Pod-level securityContext. Empty by default (API runs as root in current
+  # image, no PVCs). Set fsGroup if you add a volume that needs non-root write.
+  podSecurityContext: {}
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -50,6 +53,13 @@ agent:
     storageClass: ""
     size: 1Gi
   podAnnotations: {}
+  # Pod-level securityContext. fsGroup=1000 matches the `agent` user baked
+  # into the karna-agent image (useradd -u 1000). Without this, the workspace
+  # and keyring PVCs mount as root:root and the agent process can't write.
+  # OnRootMismatch avoids a slow recursive chmod on the 50Gi workspace.
+  podSecurityContext:
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -69,6 +79,8 @@ frontend:
       cpu: 250m
       memory: 512Mi
   podAnnotations: {}
+  # Pod-level securityContext. Empty by default (frontend runs as root, no PVCs).
+  podSecurityContext: {}
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -92,13 +104,32 @@ codeServer:
     storageClass: ""
     size: 5Gi
   podAnnotations: {}
+  # Pod-level securityContext. fsGroup=1000 matches the `coder` user baked
+  # into the upstream code-server image, so the extensions PVC is writable.
+  podSecurityContext:
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
   nodeSelector: {}
   tolerations: []
   affinity: {}
 
 # -- PostgreSQL (Bitnami subchart)
+# Bitnami sunset: free images moved to docker.io/bitnamilegacy/* in Aug 2025.
+# The original bitnami/* namespace only ships paid/hardened tags now and old
+# free tags have been purged. Pin to bitnamilegacy until we migrate off Bitnami.
 postgresql:
   enabled: true
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+  volumePermissions:
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/os-shell
+  metrics:
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/postgres-exporter
   auth:
     username: karna
     password: ""  # Auto-generated if empty
@@ -118,9 +149,32 @@ postgresql:
     # Key in existing secret containing the password
     existingSecretPasswordKey: password
 
-# -- Redis (Bitnami subchart)
+# -- Redis (Bitnami subchart) — same sunset note as postgresql above.
 redis:
   enabled: true
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/redis
+  sentinel:
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/redis-sentinel
+  metrics:
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/redis-exporter
+  volumePermissions:
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/os-shell
+  sysctl:
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/os-shell
+  kubectl:
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/kubectl
   auth:
     enabled: false
   master:
@@ -142,10 +196,15 @@ auth:
   # Keys in existing secret
   existingSecretAuthKey: auth-secret
 
+  # Explicit override for the AUTH_URL env var. Set this when the chart's
+  # ingress is disabled (e.g. external ingress controller, TF-managed ALB).
+  # If empty AND ingress is enabled, falls back to ingress.hosts[0].
+  url: ""
+
   # Google OAuth (Auth.js). Set clientId + clientSecret to enable.
   # Callback URL to register in Google Cloud Console:
   #   {AUTH_URL}/api/auth/callback/google
-  # where AUTH_URL is derived from ingress.hosts[0].host.
+  # where AUTH_URL is auth.url (if set) or derived from ingress.hosts[0].host.
   google:
     enabled: false
     clientId: ""

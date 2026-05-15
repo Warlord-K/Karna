@@ -25,6 +25,10 @@ spec:
         {{- include "karna.selectorLabels" (dict "context" . "component" "frontend") | nindent 8 }}
     spec:
       serviceAccountName: {{ include "karna.serviceAccountName" . }}
+      {{- with .Values.frontend.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -46,9 +50,9 @@ spec:
               value: "true"
             - name: API_URL
               value: "http://{{ include "karna.fullname" . }}-api:8081"
-            {{- if .Values.ingress.enabled }}
+            {{- with (include "karna.authUrl" .) }}
             - name: AUTH_URL
-              value: {{ include "karna.authUrl" . | quote }}
+              value: {{ . | quote }}
             {{- end }}
             - name: POSTGRES_PASSWORD
               valueFrom:

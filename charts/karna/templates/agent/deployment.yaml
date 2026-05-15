@@ -27,6 +27,10 @@ spec:
     spec:
       serviceAccountName: {{ include "karna.serviceAccountName" . }}
       terminationGracePeriodSeconds: {{ .Values.agent.terminationGracePeriodSeconds }}
+      {{- with .Values.agent.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

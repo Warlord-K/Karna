@@ -41,8 +41,9 @@ RUN npm install -g @anthropic-ai/claude-code @openai/codex
 # safe.directory is static, set at build time
 RUN git config --global safe.directory "*"
 
-# Create non-root user (Claude Code refuses --dangerously-skip-permissions as root)
-RUN useradd -m -s /bin/bash agent
+# Create non-root user (Claude Code refuses --dangerously-skip-permissions as root).
+# uid=1000 is pinned so the chart's fsGroup=1000 lines up reliably.
+RUN useradd -u 1000 -m -s /bin/bash agent
 
 WORKDIR /app
 COPY --from=builder /karna-agent ./karna-agent

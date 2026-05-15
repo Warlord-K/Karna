@@ -28,6 +28,10 @@ spec:
         {{- include "karna.selectorLabels" (dict "context" . "component" "api") | nindent 8 }}
     spec:
       serviceAccountName: {{ include "karna.serviceAccountName" . }}
+      {{- with .Values.api.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

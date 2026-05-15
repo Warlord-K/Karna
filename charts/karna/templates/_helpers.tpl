@@ -182,10 +182,13 @@ Service account name.
 {{- end }}
 
 {{/*
-Frontend AUTH_URL — derived from ingress host.
+Frontend AUTH_URL — explicit auth.url wins; otherwise derived from ingress host
+when chart-managed ingress is enabled.
 */}}
 {{- define "karna.authUrl" -}}
-{{- if .Values.ingress.enabled -}}
+{{- if .Values.auth.url -}}
+{{- .Values.auth.url -}}
+{{- else if .Values.ingress.enabled -}}
 {{- $host := (index .Values.ingress.hosts 0).host -}}
 {{- if .Values.ingress.tls -}}
 {{- printf "https://%s" $host -}}
