@@ -2,8 +2,8 @@ apiVersion: v2
 name: karna
 description: Self-hosted autonomous coding agent — AI plans and implements tasks, opens PRs, and iterates on feedback
 type: application
-version: 0.1.1
-appVersion: "0.1.1"
+version: 0.1.2
+appVersion: "0.1.2"
 home: https://github.com/warlord-k/karna
 sources:
   - https://github.com/warlord-k/karna
