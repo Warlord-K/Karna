@@ -245,7 +245,7 @@ subtasks -->
 
 **Key behaviors:**
 - Parent tasks with subtasks are excluded from `next_actionable_task()` and `has_active_task()` — only subtasks are worked on
-- Subtasks are hidden from the Kanban board (nested under parent via `nestSubtasks()`)
+- Both parent and subtask cards render on the kanban — `nestSubtasks()` annotates parents with `.subtasks`/`subtask_count` but returns the full flat list, and `getTasksForColumn()` defaults `includeSubtasks=true`
 - The TaskCard shows a progress bar for parent tasks (X/N subtasks complete)
 - The TaskDetailModal shows a "Subtasks" tab with per-subtask status, repo, and PR links
 - Deleting a parent cascades to all subtasks (ON DELETE CASCADE)
@@ -437,6 +437,20 @@ Every task has an `assignee_user_id`. NULL = the agent picks it up (default, ori
 
 **User list source:** `GET /api/users` (filters out the default system user — that ID represents "no human", not a person).
 
+## Shared Workspace Mode (Small Teams)
+
+Set `KARNA_SHARED_WORKSPACE=true` (env on `api` + `agent`) to make Karna a single shared team workspace. Every signed-in user can see and edit every task, schedule, and repo — regardless of `user_id`. Auth is still required at login; pair with `SIGNUP_DISABLED=true` so only invited users can join.
+
+**Where the flag lives:** [shared/src/db.rs](shared/src/db.rs) — `Database::with_shared_workspace(bool)` on the builder, checked by every user-scoped query (`list_tasks_for_user`, `update_task`, `delete_task`, `task_belongs_to_user`, `list_schedules_for_user`, `update_schedule_fields`, `delete_schedule`, `schedule_belongs_to_user`, `count_open_tasks_with_prefix`, `max_prefix_number`). When set, the `WHERE user_id = ...` clause is dropped entirely.
+
+**Wiring:** `api/src/main.rs` and `agent/src/main.rs` read `KARNA_SHARED_WORKSPACE` and call `.with_shared_workspace(...)` on the `Database` builder. The `task_belongs_to_user` filter in `api/src/routes/tasks.rs` (post_comment / create_subtasks) checks `state.db.is_shared_workspace()` before falling through. `/api/config` exposes `sharedWorkspace: bool` so the frontend can adjust UX.
+
+**Frontend signal:** When `sharedWorkspace=true`, task cards display a "creator" badge (`User` icon + name) whenever the task wasn't created by the current viewer — so people know whose task they're touching. Implemented in [components/agent/task-card.tsx](frontend/components/agent/task-card.tsx) via the `creatorLabel` prop, resolved in [(dashboard)/page.tsx](frontend/app/(dashboard)/page.tsx) using `useUsers()` and the current session user id.
+
+**Cache:** Cache keys remain per-user (`cache:tasks:list:{user_id}`) but content is identical across users in shared mode. Pattern invalidation already busts all keys on writes, so correctness is preserved. The redundancy is bounded by user count.
+
+**Helm:** `auth.sharedWorkspace: false` (default). Set to `true` to inject `KARNA_SHARED_WORKSPACE=true` into both `api` and `agent` deployments.
+
 ## External Task Sources (Linear / ClickUp Ingest)
 
 Tasks can be ingested from Linear or ClickUp via webhooks. Each task records its origin in `external_source` / `external_id` / `external_url`. When the agent opens a PR, it posts a backlink onto the external task so the source system stays in sync.
@@ -500,7 +514,16 @@ The agent receives PR feedback from GitHub via webhooks — it does **not** poll
 
 **Port exposure:** Agent API is on host port `${AGENT_API_PORT:-8080}` (docker-compose). For public access, configure `TUNNEL_AGENT_HOSTNAME` in `.env` (credentials-based tunnel) or add a route in the CF dashboard (token-based tunnel).
 
-**Auto-registration:** Webhooks are automatically registered on repos during onboarding when a public URL is available. The agent derives `webhook_url` from: `AGENT_WEBHOOK_URL` env → `TUNNEL_AGENT_HOSTNAME` env (prefixed with `https://`) → None. If available, `onboard_repo()` calls `github::ensure_repo_webhook()` after profiling completes. Idempotent — checks existing hooks first. Requires `admin:repo_hook` scope on `GITHUB_TOKEN`; logs a warning and continues if missing.
+**Auto-registration:** Webhooks are automatically registered on repos during onboarding when a public URL is available. The agent derives `webhook_url` from: `AGENT_WEBHOOK_URL` env → `TUNNEL_AGENT_HOSTNAME` env (prefixed with `https://`) → None. If available, `onboard_repo()` calls `github::ensure_repo_webhook()` after profiling completes. Idempotent — checks existing hooks first. Requires `admin:repo_hook` scope on `GITHUB_TOKEN`.
+
+The outcome is persisted on `repo_profiles.webhook_status` (`registered` | `failed` | `unsupported` | `not_registered`) plus `webhook_error` and `webhook_url`. The Repos UI surfaces this so users see the difference between "issue sync flag is on" and "webhook is actually live" — see migration `015_webhook_status.sql`.
+
+**Reconciler:** `onboarding::reconcile_webhooks()` runs every poll cycle (see `agent/src/main.rs`). For every `ready` repo with `sync_issues=true` whose webhook isn't `registered` (or points to a stale URL), it retries registration. This means:
+- Toggling `sync_issues` on later → webhook gets installed automatically on next poll.
+- Setting `AGENT_WEBHOOK_URL` after startup → existing repos pick it up without re-onboarding.
+- Webhook failures (e.g. missing `admin:repo_hook` scope) keep getting retried after you rotate the token.
+
+**UI feedback** ([components/agent/repo-card.tsx](frontend/components/agent/repo-card.tsx), [components/agent/repo-detail-modal.tsx](frontend/components/agent/repo-detail-modal.tsx)): the "issues" badge turns amber when sync is on but no webhook is live; the detail modal shows a dedicated webhook status row with the underlying reason ("No public URL configured", "Webhook registration failed: …"). `/api/config` exposes `webhookUrlConfigured: bool` so the frontend can globally surface when no `AGENT_WEBHOOK_URL` / `TUNNEL_AGENT_HOSTNAME` is set.
 
 **Signature verification:** When `GITHUB_WEBHOOK_SECRET` is set, the handler verifies `X-Hub-Signature-256` using HMAC-SHA256. If no secret is configured, all payloads are accepted (verification disabled). The same secret is passed to GitHub when auto-registering webhooks during onboarding.
 
@@ -566,6 +589,7 @@ All secrets live in `.env` (gitignored). User config lives in `config.yaml` (git
 | AGENT_API_PORT | No (default 8080) | Host port for agent API (webhooks, health) |
 | TUNNEL_AGENT_HOSTNAME | No | Hostname for agent API (CF tunnel); also webhook URL fallback |
 | AGENT_WEBHOOK_URL | No | Full URL override for webhook registration (e.g. ngrok URL) |
+| KARNA_SHARED_WORKSPACE | No | `true` = all signed-in users see/edit all tasks. For small teams; pair with `SIGNUP_DISABLED=true` |
 | GITHUB_WEBHOOK_SECRET | No | HMAC-SHA256 secret for webhook signature verification |
 | LINEAR_WEBHOOK_SECRET | No | HMAC-SHA256 secret for `/webhooks/linear` |
 | LINEAR_API_KEY | No | Posts PR backlink comments onto Linear issues |
@@ -864,6 +888,21 @@ Multiple agent replicas require `ReadWriteMany` (RWX) storage for the workspace 
 ### File Sync
 
 Migration and skill files in `charts/karna/files/` are copies of the repo-root `migrations/` and `skills/` directories. Keep them in sync when modifying migrations or skills.
+
+### Extending the Agent Pod (Custom CLIs + Secrets)
+
+Skills can require custom binaries (e.g. `terraform`, `aws`, vendor CLIs) and tokens that karna doesn't know about. Four escape hatches on `agent.*` keep this out-of-tree — no chart fork, no rebuilt `karna-agent` image:
+
+| Values key | Type | Purpose |
+|---|---|---|
+| `agent.extraEnv` | `[]corev1.EnvVar` | Append env vars (raw `value:` or `valueFrom:`). Templated via `tpl`, so Helm refs work. |
+| `agent.extraEnvFrom` | `[]corev1.EnvFromSource` | Bulk-load every key of a `Secret`/`ConfigMap` as env. |
+| `agent.extraInitContainers` | `[]corev1.Container` | Run before agent starts. Common pattern: copy a vendor CLI into a shared emptyDir. |
+| `agent.extraVolumes` / `agent.extraVolumeMounts` | volumes / mounts | Pair an emptyDir (or configMap/secret) with a mount on PATH (e.g. `/home/agent/.local/bin`). |
+
+**Typical custom-CLI install pattern:** init container copies the binary from a vendor image into an `emptyDir` volume; the agent container mounts the same emptyDir somewhere on PATH. Tokens for the CLI come in via `extraEnv` pointing at a user-managed `Secret` (or External Secrets Operator / Vault / SOPS — the chart only references the Secret name, never the value).
+
+Wiring lives in [charts/karna/templates/agent/deployment.yaml](charts/karna/templates/agent/deployment.yaml) (each block guarded by `with`, so empty lists render nothing) and defaults in [charts/karna/values.yaml](charts/karna/values.yaml).
 
 ## Rules
 

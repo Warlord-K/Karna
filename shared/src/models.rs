@@ -276,6 +276,11 @@ pub struct RepoProfile {
     pub error_message: Option<String>,
     pub cost_usd: f64,
     pub sync_issues: bool,
+    /// not_registered | registered | failed | unsupported
+    /// "unsupported" = no public webhook URL configured on the agent.
+    pub webhook_status: String,
+    pub webhook_error: Option<String>,
+    pub webhook_url: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
 }

@@ -18,3 +18,5 @@ signing/
 
 # Karna updater state
 .karna-updater.pid
+charts/karna/charts/
+Chart.lock

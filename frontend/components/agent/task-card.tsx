@@ -20,9 +20,15 @@ const statusConfig: Record<string, { label: string; color: string; pulse?: boole
 interface TaskCardProps {
   task: AgentTask;
   onClick: () => void;
+  /**
+   * Display label for the task creator. Set only when the workspace is shared
+   * AND the task wasn't created by the current viewer (so people know whose
+   * task they're touching).
+   */
+  creatorLabel?: string | null;
 }
 
-export function TaskCard({ task, onClick }: TaskCardProps) {
+export function TaskCard({ task, onClick, creatorLabel }: TaskCardProps) {
   const {
     attributes, listeners, setNodeRef, transform, transition, isDragging,
   } = useSortable({ id: task.id });
@@ -103,6 +109,15 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
             className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 h-4 rounded-sm bg-blue-500/15 border border-blue-500/30 text-blue-400 flex-shrink-0"
           >
             <User size={10} weight="bold" /> Human
+          </span>
+        )}
+        {creatorLabel && (
+          <span
+            title={`Created by ${creatorLabel}`}
+            className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 h-4 rounded-sm bg-gray-3 border border-gray-5 text-gray-9 flex-shrink-0 max-w-[120px] truncate"
+          >
+            <User size={10} weight="bold" />
+            <span className="truncate">{creatorLabel}</span>
           </span>
         )}
         {task.external_source && (

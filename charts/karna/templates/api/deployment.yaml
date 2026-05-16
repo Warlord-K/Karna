@@ -67,6 +67,10 @@ spec:
             - name: AUTH_DISABLED
               value: "true"
             {{- end }}
+            {{- if .Values.auth.sharedWorkspace }}
+            - name: KARNA_SHARED_WORKSPACE
+              value: "true"
+            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /etc/karna/config.yaml

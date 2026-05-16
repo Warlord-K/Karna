@@ -215,10 +215,9 @@ export function hasSubtaskDefinitions(task: AgentTask): boolean {
   return parseSubtasksFromPlan(task.plan_content).length > 0;
 }
 
-/** Nest subtasks under parent tasks. Returns top-level tasks only (with subtasks populated). */
+/** Annotate parent tasks with their subtask roll-up (count, done count, summed cost). Returns the full flat list. */
 export function nestSubtasks(tasks: AgentTask[]): AgentTask[] {
   const subtasksByParent = new Map<string, AgentTask[]>();
-  const topLevel: AgentTask[] = [];
 
   for (const task of tasks) {
     if (task.parent_task_id) {
@@ -237,14 +236,13 @@ export function nestSubtasks(tasks: AgentTask[]): AgentTask[] {
       if (subs.length > 0) {
         task.cost_usd += subs.reduce((sum, s) => sum + s.cost_usd, 0);
       }
-      topLevel.push(task);
     }
   }
 
-  return topLevel;
+  return tasks;
 }
 
-export function getTasksForColumn(tasks: AgentTask[], column: AgentColumn, includeSubtasks = false): AgentTask[] {
+export function getTasksForColumn(tasks: AgentTask[], column: AgentColumn, includeSubtasks = true): AgentTask[] {
   const statuses = COLUMN_CONFIG[column].statuses;
   return tasks.filter(t => {
     if (!includeSubtasks && t.parent_task_id) return false;

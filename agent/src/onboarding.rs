@@ -98,21 +98,75 @@ async fn onboard_repo(config: &Config, db: &Database, profile: &RepoProfile) -> 
     )
     .await?;
 
-    // Auto-register GitHub webhook if a public URL is configured
-    if let Some(webhook_url) = &config.webhook_url {
-        match github::ensure_repo_webhook(
-            &profile.repo,
-            webhook_url,
-            config.github_webhook_secret.as_deref(),
-        )
-        .await
-        {
-            Ok(()) => info!(repo = %profile.repo, "Webhook configured"),
-            Err(e) => warn!(repo = %profile.repo, error = %e,
-                "Failed to register webhook (missing admin:repo_hook scope?)"),
+    // Auto-register GitHub webhook (idempotent) and persist the outcome
+    // so the UI can show whether issue sync actually works for this repo.
+    register_webhook(config, db, profile).await;
+
+    Ok(())
+}
+
+/// Attempt webhook registration and record the result on the profile.
+/// Splits out so the poll-loop reconciler can call it independently of onboarding.
+async fn register_webhook(config: &Config, db: &Database, profile: &RepoProfile) {
+    let Some(webhook_url) = &config.webhook_url else {
+        // No public URL configured — surface this in the UI rather than silently skipping.
+        let _ = db
+            .set_repo_webhook_status(
+                profile.id,
+                "unsupported",
+                None,
+                Some("Set AGENT_WEBHOOK_URL or TUNNEL_AGENT_HOSTNAME to enable GitHub webhooks"),
+            )
+            .await;
+        return;
+    };
+
+    match github::ensure_repo_webhook(
+        &profile.repo,
+        webhook_url,
+        config.github_webhook_secret.as_deref(),
+    )
+    .await
+    {
+        Ok(()) => {
+            info!(repo = %profile.repo, "Webhook configured");
+            let _ = db
+                .set_repo_webhook_status(profile.id, "registered", Some(webhook_url), None)
+                .await;
+        }
+        Err(e) => {
+            warn!(repo = %profile.repo, error = %e,
+                "Failed to register webhook (missing admin:repo_hook scope?)");
+            let _ = db
+                .set_repo_webhook_status(
+                    profile.id,
+                    "failed",
+                    Some(webhook_url),
+                    Some(&format!("{e:#}")),
+                )
+                .await;
         }
     }
+}
 
+/// Reconcile webhook registrations for ready repos. Runs every poll cycle so
+/// that toggling `sync_issues` on later, or configuring `AGENT_WEBHOOK_URL`
+/// after startup, recovers without a full re-onboarding.
+pub async fn reconcile_webhooks(config: &Config, db: &Database) -> Result<()> {
+    let profiles = db.get_ready_repo_profiles().await?;
+    for profile in profiles {
+        // Only act on repos the user wants to sync.
+        if !profile.sync_issues {
+            continue;
+        }
+        // Skip already-registered repos pointing at the current URL.
+        if profile.webhook_status == "registered"
+            && profile.webhook_url.as_deref() == config.webhook_url.as_deref()
+        {
+            continue;
+        }
+        register_webhook(config, db, &profile).await;
+    }
     Ok(())
 }
 

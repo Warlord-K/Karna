@@ -11,6 +11,10 @@ use crate::models::{AgentLog, AgentTask, RepoProfile, Schedule, ScheduledRun, Sc
 pub struct Database {
     pool: PgPool,
     redis: Option<redis::Client>,
+    /// When true, user-scoped queries skip the `WHERE user_id = ...` filter.
+    /// Every authenticated user sees and can edit every task / schedule / repo.
+    /// Auth is still required at the route layer.
+    shared_workspace: bool,
 }
 
 impl Database {
@@ -19,7 +23,7 @@ impl Database {
             .max_connections(10)
             .connect(url)
             .await?;
-        Ok(Self { pool, redis: None })
+        Ok(Self { pool, redis: None, shared_workspace: false })
     }
 
     /// Attach a Redis client so writes automatically invalidate cache keys.
@@ -27,6 +31,18 @@ impl Database {
     pub fn with_redis(mut self, redis: redis::Client) -> Self {
         self.redis = Some(redis);
         self
+    }
+
+    /// Enable shared-workspace mode (KARNA_SHARED_WORKSPACE=true). When set,
+    /// user-scoped queries return rows regardless of `user_id` so small teams
+    /// can collaborate on a single workspace.
+    pub fn with_shared_workspace(mut self, shared: bool) -> Self {
+        self.shared_workspace = shared;
+        self
+    }
+
+    pub fn is_shared_workspace(&self) -> bool {
+        self.shared_workspace
     }
 
     // --- Cache invalidation helpers (no-ops when redis is None) ---
@@ -122,7 +138,19 @@ impl Database {
     }
 
     /// List all tasks for a given user (includes default system user), ordered by priority then creation date.
+    /// In shared-workspace mode, returns every task regardless of `user_id`.
     pub async fn list_tasks_for_user(&self, user_id: Uuid) -> Result<Vec<AgentTask>> {
+        if self.shared_workspace {
+            let tasks = sqlx::query_as::<_, AgentTask>(
+                r#"SELECT * FROM agent_tasks
+                   ORDER BY
+                     CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
+                     created_at ASC"#,
+            )
+            .fetch_all(&self.pool)
+            .await?;
+            return Ok(tasks);
+        }
         let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         let tasks = sqlx::query_as::<_, AgentTask>(
             r#"SELECT * FROM agent_tasks
@@ -234,15 +262,23 @@ impl Database {
             return Ok(0);
         }
 
-        // Build a dynamic query — we need to use raw SQL here
-        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
-        let sql = format!(
-            "UPDATE agent_tasks SET {} WHERE id = ${} AND (user_id = ${} OR user_id = ${})",
-            set_clauses.join(", "),
-            idx,
-            idx + 1,
-            idx + 2,
-        );
+        // Build a dynamic query — we need to use raw SQL here. In shared-workspace mode
+        // the ownership filter is dropped so any signed-in user can edit any task.
+        let sql = if self.shared_workspace {
+            format!(
+                "UPDATE agent_tasks SET {} WHERE id = ${}",
+                set_clauses.join(", "),
+                idx,
+            )
+        } else {
+            format!(
+                "UPDATE agent_tasks SET {} WHERE id = ${} AND (user_id = ${} OR user_id = ${})",
+                set_clauses.join(", "),
+                idx,
+                idx + 1,
+                idx + 2,
+            )
+        };
 
         let mut query = sqlx::query(&sql);
         for val in &values {
@@ -252,7 +288,12 @@ impl Database {
                 query = query.bind(val);
             }
         }
-        query = query.bind(id).bind(user_id).bind(default_id);
+        if self.shared_workspace {
+            query = query.bind(id);
+        } else {
+            let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
+            query = query.bind(id).bind(user_id).bind(default_id);
+        }
 
         let result = query.execute(&self.pool).await?;
         if result.rows_affected() > 0 {
@@ -261,17 +302,24 @@ impl Database {
         Ok(result.rows_affected())
     }
 
-    /// Delete a task (must belong to user or default system user).
+    /// Delete a task (must belong to user or default system user, or shared-workspace mode).
     pub async fn delete_task(&self, id: Uuid, user_id: Uuid) -> Result<u64> {
-        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
-        let result = sqlx::query(
-            "DELETE FROM agent_tasks WHERE id = $1 AND (user_id = $2 OR user_id = $3)",
-        )
-        .bind(id)
-        .bind(user_id)
-        .bind(default_id)
-        .execute(&self.pool)
-        .await?;
+        let result = if self.shared_workspace {
+            sqlx::query("DELETE FROM agent_tasks WHERE id = $1")
+                .bind(id)
+                .execute(&self.pool)
+                .await?
+        } else {
+            let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
+            sqlx::query(
+                "DELETE FROM agent_tasks WHERE id = $1 AND (user_id = $2 OR user_id = $3)",
+            )
+            .bind(id)
+            .bind(user_id)
+            .bind(default_id)
+            .execute(&self.pool)
+            .await?
+        };
         if result.rows_affected() > 0 {
             self.bust_tasks(Some(id)).await;
         }
@@ -532,7 +580,17 @@ impl Database {
     }
 
     /// Verify a task belongs to a user (or default system user). Returns true if it does.
+    /// In shared-workspace mode, returns true whenever the task exists.
     pub async fn task_belongs_to_user(&self, task_id: Uuid, user_id: Uuid) -> Result<bool> {
+        if self.shared_workspace {
+            let count = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM agent_tasks WHERE id = $1",
+            )
+            .bind(task_id)
+            .fetch_one(&self.pool)
+            .await?;
+            return Ok(count > 0);
+        }
         let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         let count = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM agent_tasks WHERE id = $1 AND (user_id = $2 OR user_id = $3)",
@@ -557,7 +615,16 @@ impl Database {
     }
 
     /// List schedules for a given user (includes default local user).
+    /// In shared-workspace mode, returns every schedule.
     pub async fn list_schedules_for_user(&self, user_id: Uuid) -> Result<Vec<Schedule>> {
+        if self.shared_workspace {
+            let rows = sqlx::query_as::<_, Schedule>(
+                "SELECT * FROM schedules ORDER BY created_at ASC",
+            )
+            .fetch_all(&self.pool)
+            .await?;
+            return Ok(rows);
+        }
         let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         let rows = sqlx::query_as::<_, Schedule>(
             "SELECT * FROM schedules WHERE user_id = $1 OR user_id = $2 ORDER BY created_at ASC",
@@ -666,14 +733,21 @@ impl Database {
             return Ok(0);
         }
 
-        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
-        let sql = format!(
-            "UPDATE schedules SET {} WHERE id = ${} AND (user_id = ${} OR user_id = ${})",
-            set_parts.join(", "),
-            bind_idx,
-            bind_idx + 1,
-            bind_idx + 2,
-        );
+        let sql = if self.shared_workspace {
+            format!(
+                "UPDATE schedules SET {} WHERE id = ${}",
+                set_parts.join(", "),
+                bind_idx,
+            )
+        } else {
+            format!(
+                "UPDATE schedules SET {} WHERE id = ${} AND (user_id = ${} OR user_id = ${})",
+                set_parts.join(", "),
+                bind_idx,
+                bind_idx + 1,
+                bind_idx + 2,
+            )
+        };
 
         let mut query = sqlx::query(&sql);
         for val in &string_vals {
@@ -682,7 +756,12 @@ impl Database {
                 None => query = query.bind(None::<String>),
             }
         }
-        query = query.bind(id).bind(user_id).bind(default_id);
+        if self.shared_workspace {
+            query = query.bind(id);
+        } else {
+            let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
+            query = query.bind(id).bind(user_id).bind(default_id);
+        }
 
         let result = query.execute(&self.pool).await?;
         if result.rows_affected() > 0 {
@@ -691,25 +770,41 @@ impl Database {
         Ok(result.rows_affected())
     }
 
-    /// Delete a schedule (must belong to user).
+    /// Delete a schedule (must belong to user, unless shared-workspace mode).
     pub async fn delete_schedule(&self, id: Uuid, user_id: Uuid) -> Result<u64> {
-        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
-        let result = sqlx::query(
-            "DELETE FROM schedules WHERE id = $1 AND (user_id = $2 OR user_id = $3)",
-        )
-        .bind(id)
-        .bind(user_id)
-        .bind(default_id)
-        .execute(&self.pool)
-        .await?;
+        let result = if self.shared_workspace {
+            sqlx::query("DELETE FROM schedules WHERE id = $1")
+                .bind(id)
+                .execute(&self.pool)
+                .await?
+        } else {
+            let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
+            sqlx::query(
+                "DELETE FROM schedules WHERE id = $1 AND (user_id = $2 OR user_id = $3)",
+            )
+            .bind(id)
+            .bind(user_id)
+            .bind(default_id)
+            .execute(&self.pool)
+            .await?
+        };
         if result.rows_affected() > 0 {
             self.bust_schedules(Some(id)).await;
         }
         Ok(result.rows_affected())
     }
 
-    /// Verify a schedule belongs to a user (or default user).
+    /// Verify a schedule belongs to a user (or default user, or shared-workspace mode).
     pub async fn schedule_belongs_to_user(&self, id: Uuid, user_id: Uuid) -> Result<bool> {
+        if self.shared_workspace {
+            let count = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM schedules WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await?;
+            return Ok(count > 0);
+        }
         let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         let count = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM schedules WHERE id = $1 AND (user_id = $2 OR user_id = $3)",
@@ -787,8 +882,19 @@ impl Database {
     }
 
     pub async fn count_open_tasks_with_prefix(&self, user_id: Uuid, prefix: &str) -> Result<i64> {
-        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         let pattern = format!("{prefix}%");
+        if self.shared_workspace {
+            let count = sqlx::query_scalar::<_, i64>(
+                r#"SELECT COUNT(*) FROM agent_tasks
+                   WHERE title LIKE $1
+                   AND status NOT IN ('done', 'failed', 'cancelled')"#,
+            )
+            .bind(&pattern)
+            .fetch_one(&self.pool)
+            .await?;
+            return Ok(count);
+        }
+        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         let count = sqlx::query_scalar::<_, i64>(
             r#"SELECT COUNT(*) FROM agent_tasks
                WHERE (user_id = $1 OR user_id = $3) AND title LIKE $2
@@ -803,17 +909,26 @@ impl Database {
     }
 
     pub async fn max_prefix_number(&self, user_id: Uuid, prefix: &str) -> Result<i32> {
-        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         let pattern = format!("{prefix}-%");
-        let titles: Vec<String> = sqlx::query_scalar(
-            r#"SELECT title FROM agent_tasks
-               WHERE (user_id = $1 OR user_id = $3) AND title LIKE $2"#,
-        )
-        .bind(user_id)
-        .bind(&pattern)
-        .bind(default_id)
-        .fetch_all(&self.pool)
-        .await?;
+        let titles: Vec<String> = if self.shared_workspace {
+            sqlx::query_scalar(
+                r#"SELECT title FROM agent_tasks WHERE title LIKE $1"#,
+            )
+            .bind(&pattern)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
+            sqlx::query_scalar(
+                r#"SELECT title FROM agent_tasks
+                   WHERE (user_id = $1 OR user_id = $3) AND title LIKE $2"#,
+            )
+            .bind(user_id)
+            .bind(&pattern)
+            .bind(default_id)
+            .fetch_all(&self.pool)
+            .await?
+        };
 
         let prefix_dash = format!("{prefix}-");
         let max_num = titles
@@ -950,6 +1065,30 @@ impl Database {
         sqlx::query(
             "UPDATE repo_profiles SET status = 'failed', error_message = $1 WHERE id = $2",
         )
+        .bind(error)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        self.bust_repos().await;
+        Ok(())
+    }
+
+    /// Record the outcome of a GitHub webhook registration attempt.
+    /// `status` should be one of: `registered`, `failed`, `unsupported`, `not_registered`.
+    pub async fn set_repo_webhook_status(
+        &self,
+        id: Uuid,
+        status: &str,
+        webhook_url: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"UPDATE repo_profiles
+               SET webhook_status = $1, webhook_url = $2, webhook_error = $3
+               WHERE id = $4"#,
+        )
+        .bind(status)
+        .bind(webhook_url)
         .bind(error)
         .bind(id)
         .execute(&self.pool)

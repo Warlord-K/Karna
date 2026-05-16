@@ -31,6 +31,10 @@ interface AppConfig {
   backends: Record<string, { models: string[]; default_model: string }>;
   skills: string[];
   mcpServers: string[];
+  /** When true, all signed-in users see/edit each other's tasks. */
+  sharedWorkspace: boolean;
+  /** Whether a public webhook URL is configured on the agent. */
+  webhookUrlConfigured: boolean;
 }
 
 export function useConfig(enabled: boolean) {
@@ -44,6 +48,8 @@ export function useConfig(enabled: boolean) {
         backends: data.backends || {},
         skills: data.skills || [],
         mcpServers: data.mcpServers || [],
+        sharedWorkspace: !!data.sharedWorkspace,
+        webhookUrlConfigured: !!data.webhookUrlConfigured,
       };
     },
     enabled,

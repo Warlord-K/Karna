@@ -99,6 +99,8 @@ export function RepoDetailModal({ repo, onClose, onOnboard, onDelete }: RepoDeta
                 />
               </button>
             </div>
+
+            {repo.sync_issues && <WebhookStatusRow repo={repo} />}
           </div>
 
           {/* Commands */}
@@ -170,6 +172,47 @@ function CommandRow({ label, value }: { label: string; value: string }) {
     <div className="flex gap-2">
       <span className="text-gray-7 w-10 flex-shrink-0 text-right">{label}</span>
       <span className="text-gray-11">{value}</span>
+    </div>
+  );
+}
+
+function WebhookStatusRow({ repo }: { repo: RepoProfile }) {
+  const status = repo.webhook_status;
+  const toneByStatus: Record<string, { dot: string; text: string; label: string; hint: string }> = {
+    registered: {
+      dot: 'bg-green-500',
+      text: 'text-green-400',
+      label: 'Webhook active',
+      hint: repo.webhook_url ? `Posted to ${repo.webhook_url}` : 'GitHub events will create tasks here',
+    },
+    not_registered: {
+      dot: 'bg-amber-400',
+      text: 'text-amber-400',
+      label: 'Webhook pending',
+      hint: 'Will register on the next agent poll cycle',
+    },
+    failed: {
+      dot: 'bg-red-400',
+      text: 'text-red-400',
+      label: 'Webhook failed',
+      hint: repo.webhook_error || 'Check that GITHUB_TOKEN has admin:repo_hook scope',
+    },
+    unsupported: {
+      dot: 'bg-amber-400',
+      text: 'text-amber-400',
+      label: 'No public URL configured',
+      hint: 'Set AGENT_WEBHOOK_URL or TUNNEL_AGENT_HOSTNAME on the agent to enable issue sync',
+    },
+  };
+  const tone = toneByStatus[status] || toneByStatus.not_registered;
+
+  return (
+    <div className="bg-gray-2 rounded-lg border border-gray-3 px-3 py-2.5">
+      <div className="flex items-center gap-2">
+        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${tone.dot}`} />
+        <span className={`text-[13px] ${tone.text}`}>{tone.label}</span>
+      </div>
+      <div className="text-[11px] text-gray-7 mt-0.5 pl-4">{tone.hint}</div>
     </div>
   );
 }

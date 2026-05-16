@@ -11,11 +11,23 @@ pub async fn get(
 ) -> Result<Json<Value>, StatusCode> {
     let db = state.db.clone();
     let config = state.config.clone();
+    let shared_workspace = state.db.is_shared_workspace();
+    let webhook_url_configured = std::env::var("AGENT_WEBHOOK_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            std::env::var("TUNNEL_AGENT_HOSTNAME")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
+        .is_some();
     let result = cache::get_or_set(
         &state.redis,
         cache::CONFIG_KEY,
         cache::DEFAULT_TTL_SECS,
-        move || async move { build_config_response(&db, &config).await },
+        move || async move {
+            build_config_response(&db, &config, shared_workspace, webhook_url_configured).await
+        },
     )
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -26,6 +38,8 @@ pub async fn get(
 async fn build_config_response(
     db: &karna_shared::db::Database,
     config: &crate::ApiConfig,
+    shared_workspace: bool,
+    webhook_url_configured: bool,
 ) -> anyhow::Result<Value> {
     // Start with config repos
     let mut seen = std::collections::HashSet::new();
@@ -81,5 +95,7 @@ async fn build_config_response(
         "backends": backends,
         "skills": skills,
         "mcpServers": mcp_servers,
+        "sharedWorkspace": shared_workspace,
+        "webhookUrlConfigured": webhook_url_configured,
     }))
 }

@@ -17,6 +17,13 @@ pub struct AppState {
     pub config: ApiConfig,
 }
 
+fn parse_bool_env(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
@@ -38,9 +45,14 @@ async fn main() -> anyhow::Result<()> {
         .expect("PORT must be a number");
 
     let redis = redis::Client::open(redis_url)?;
+    let shared_workspace = parse_bool_env("KARNA_SHARED_WORKSPACE");
+    if shared_workspace {
+        info!("Shared-workspace mode enabled — every signed-in user can see and edit all tasks/schedules");
+    }
     let db = karna_shared::db::Database::connect(&database_url)
         .await?
-        .with_redis(redis.clone());
+        .with_redis(redis.clone())
+        .with_shared_workspace(shared_workspace);
     let config = config::load()?;
 
     let state = AppState { db, redis, config };

@@ -12,7 +12,8 @@ import {
   getColumnForStatus,
   AgentTaskStatus,
 } from '@/lib/agent-tasks';
-import { useTasks } from '@/hooks/use-tasks';
+import { useTasks, useConfig, useUsers } from '@/hooks/use-tasks';
+import { userDisplayName } from '@/lib/agent-tasks';
 import { AgentColumn } from '@/components/agent/agent-column';
 import { Plus, ArrowsClockwise } from '@phosphor-icons/react';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
@@ -23,7 +24,7 @@ import { updateTask as updateTaskApi } from '@/lib/agent-tasks';
 
 export default function BoardPage() {
   const authDisabled = useAuthDisabled();
-  const { status: authStatus } = useSession();
+  const { data: session, status: authStatus } = useSession();
   const isReady = authDisabled || authStatus === 'authenticated';
   const router = useRouter();
 
@@ -32,6 +33,17 @@ export default function BoardPage() {
 
   const queryClient = useQueryClient();
   const { data: tasks = [] } = useTasks(isReady);
+  const { data: config } = useConfig(isReady);
+  const sharedWorkspace = config?.sharedWorkspace ?? false;
+  const { data: users = [] } = useUsers(isReady && sharedWorkspace);
+  const currentUserId = (session?.user as { id?: string } | undefined)?.id;
+
+  const getCreatorLabel = (task: AgentTask): string | null => {
+    if (!sharedWorkspace) return null;
+    if (!task.user_id || task.user_id === currentUserId) return null;
+    const u = users.find((u) => u.id === task.user_id);
+    return u ? userDisplayName(u) : null;
+  };
 
   const sensors = useSensors(
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
@@ -127,6 +139,7 @@ export default function BoardPage() {
                 tasks={getTasksForColumn(tasks, column)}
                 onTaskClick={handleTaskClick}
                 onCreateTask={column === 'todo' ? handleNewTask : undefined}
+                getCreatorLabel={getCreatorLabel}
               />
             ))}
           </div>

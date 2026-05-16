@@ -67,10 +67,19 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     info!("Connected to Redis");
 
-    // Connect to Postgres with cache invalidation wired up
+    // Connect to Postgres with cache invalidation wired up.
+    // Shared workspace mode lets the agent treat all human-owned tasks as part
+    // of one pool — but the agent's `next_actionable_task()` already only
+    // looks at `assignee_user_id IS NULL` rows, so this is purely cosmetic for
+    // queries that use user-scoped filters. Keep it consistent with the API.
+    let shared_workspace = std::env::var("KARNA_SHARED_WORKSPACE")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
     let db = db::Database::connect(&config.database_url)
         .await?
-        .with_redis(redis.clone());
+        .with_redis(redis.clone())
+        .with_shared_workspace(shared_workspace);
     info!("Connected to Postgres");
 
     // Sync config-defined schedules to database
@@ -199,6 +208,13 @@ async fn main() -> anyhow::Result<()> {
             match onboarding::check_pending_onboards(&config, &db).await {
                 Ok(()) => {}
                 Err(e) => error!("Onboarding error: {e:#}"),
+            }
+
+            // Reconcile GitHub webhooks for ready repos whose webhook is missing
+            // or pointed at a different URL than what's currently configured.
+            match onboarding::reconcile_webhooks(&config, &db).await {
+                Ok(()) => {}
+                Err(e) => error!("Webhook reconcile error: {e:#}"),
             }
 
             // Check and run due schedules

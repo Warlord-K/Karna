@@ -64,6 +64,50 @@ agent:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # Extra env vars appended to the agent container. Use this to pass arbitrary
+  # tokens to custom skills without modifying the chart. Each entry is a raw
+  # corev1.EnvVar, so `value:` or `valueFrom:` both work.
+  # Example:
+  #   extraEnv:
+  #     - name: MY_TOOL_TOKEN
+  #       valueFrom:
+  #         secretKeyRef:
+  #           name: my-tool-creds
+  #           key: token
+  extraEnv: []
+  # envFrom sources appended to the agent container. Bulk-load every key of a
+  # Secret or ConfigMap as env vars.
+  # Example:
+  #   extraEnvFrom:
+  #     - secretRef:
+  #         name: my-tool-creds
+  extraEnvFrom: []
+  # Extra init containers run before the agent starts. Common pattern: drop
+  # custom CLI binaries into a shared emptyDir mounted on PATH so skills can
+  # invoke them without rebuilding the karna-agent image.
+  # Example:
+  #   extraInitContainers:
+  #     - name: install-tfctl
+  #       image: hashicorp/terraform:1.9
+  #       command: [sh, -c, "cp /bin/terraform /custom-bin/"]
+  #       volumeMounts:
+  #         - name: custom-bin
+  #           mountPath: /custom-bin
+  extraInitContainers: []
+  # Extra volumes mounted on the agent pod (e.g. emptyDir for custom binaries,
+  # configMap for tool configs, secret for tool credentials).
+  # Example:
+  #   extraVolumes:
+  #     - name: custom-bin
+  #       emptyDir: {}
+  extraVolumes: []
+  # Extra volume mounts on the agent container. Pair with extraVolumes above.
+  # Mount custom binaries onto PATH (e.g. /usr/local/bin or /home/agent/.local/bin).
+  # Example:
+  #   extraVolumeMounts:
+  #     - name: custom-bin
+  #       mountPath: /home/agent/.local/bin
+  extraVolumeMounts: []
 
 # -- Frontend (Next.js)
 frontend:
@@ -193,6 +237,11 @@ auth:
   secret: ""
   disabled: false
   signupDisabled: true
+  # When true, every signed-in user can see and edit ALL tasks/schedules/repos
+  # regardless of who created them. Suitable for small teams sharing one Karna
+  # instance; pair with signupDisabled: true so only invited users can join.
+  # Maps to KARNA_SHARED_WORKSPACE env on the api + agent.
+  sharedWorkspace: false
   existingSecret: ""
   # Keys in existing secret
   existingSecretAuthKey: auth-secret

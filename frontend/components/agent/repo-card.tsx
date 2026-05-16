@@ -90,12 +90,32 @@ export function RepoCard({ repo, onClick, onOnboard, onDelete }: RepoCardProps) 
           </span>
         )}
 
-        {repo.sync_issues && (
-          <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-3 text-gray-9 text-[11px]" title="Issue sync enabled">
-            <GithubLogo size={11} weight="bold" />
-            issues
-          </span>
-        )}
+        {repo.sync_issues && (() => {
+          const webhookOk = repo.webhook_status === 'registered';
+          const labelMap: Record<string, string> = {
+            registered: 'Issue sync active',
+            not_registered: 'Webhook pending registration',
+            failed: 'Webhook registration failed',
+            unsupported: 'No public webhook URL configured on the agent',
+          };
+          const tooltip = labelMap[repo.webhook_status] || 'Issue sync';
+          const tone = webhookOk
+            ? 'bg-gray-3 text-gray-9'
+            : 'bg-amber-500/15 text-amber-400 border border-amber-500/30';
+          return (
+            <span
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] ${tone}`}
+              title={repo.webhook_error ? `${tooltip}: ${repo.webhook_error}` : tooltip}
+            >
+              <GithubLogo size={11} weight="bold" />
+              issues
+              {!webhookOk && <span aria-hidden>·</span>}
+              {!webhookOk && <span className="font-mono uppercase tracking-wide text-[10px]">
+                {repo.webhook_status === 'unsupported' ? 'no url' : 'no hook'}
+              </span>}
+            </span>
+          );
+        })()}
 
         {repo.last_onboarded_at && (
           <span className="ml-auto text-gray-7">

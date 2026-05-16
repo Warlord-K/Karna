@@ -11,9 +11,11 @@ interface AgentColumnProps {
   tasks: AgentTask[];
   onTaskClick: (task: AgentTask) => void;
   onCreateTask?: () => void;
+  /** Optional resolver for the creator badge shown in shared-workspace mode. */
+  getCreatorLabel?: (task: AgentTask) => string | null;
 }
 
-export function AgentColumn({ column, tasks, onTaskClick, onCreateTask }: AgentColumnProps) {
+export function AgentColumn({ column, tasks, onTaskClick, onCreateTask, getCreatorLabel }: AgentColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: column });
   const config = COLUMN_CONFIG[column];
 
@@ -50,7 +52,11 @@ export function AgentColumn({ column, tasks, onTaskClick, onCreateTask }: AgentC
           <SortableContext items={tasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
             {tasks.map((task, index) => (
               <div key={task.id} style={{ animationDelay: `${index * 30}ms` }}>
-                <TaskCard task={task} onClick={() => onTaskClick(task)} />
+                <TaskCard
+                  task={task}
+                  onClick={() => onTaskClick(task)}
+                  creatorLabel={getCreatorLabel ? getCreatorLabel(task) : null}
+                />
               </div>
             ))}
           </SortableContext>

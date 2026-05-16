@@ -1,4 +1,5 @@
 export type RepoProfileStatus = 'pending' | 'onboarding' | 'ready' | 'failed' | 'stale';
+export type WebhookStatus = 'not_registered' | 'registered' | 'failed' | 'unsupported';
 
 export interface RepoProfile {
   id: string;
@@ -13,6 +14,9 @@ export interface RepoProfile {
   error_message: string | null;
   cost_usd: number;
   sync_issues: boolean;
+  webhook_status: WebhookStatus;
+  webhook_error: string | null;
+  webhook_url: string | null;
   created_at: string;
   updated_at: string;
 }

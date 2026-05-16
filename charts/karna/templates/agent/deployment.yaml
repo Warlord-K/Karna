@@ -35,6 +35,10 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.agent.extraInitContainers }}
+      initContainers:
+        {{- tpl (toYaml .) $ | nindent 8 }}
+      {{- end }}
       containers:
         - name: agent
           image: {{ include "karna.image" (dict "image" .Values.agent.image "global" .Values.global "appVersion" .Chart.AppVersion) }}
@@ -92,6 +96,17 @@ spec:
             - name: AGENT_WEBHOOK_URL
               value: "https://{{ .Values.ingress.agent.host }}{{ .Values.ingress.agent.path }}"
             {{- end }}
+            {{- if .Values.auth.sharedWorkspace }}
+            - name: KARNA_SHARED_WORKSPACE
+              value: "true"
+            {{- end }}
+            {{- with .Values.agent.extraEnv }}
+            {{- tpl (toYaml .) $ | nindent 12 }}
+            {{- end }}
+          {{- with .Values.agent.extraEnvFrom }}
+          envFrom:
+            {{- tpl (toYaml .) $ | nindent 12 }}
+          {{- end }}
           volumeMounts:
             - name: config
               mountPath: /etc/karna/config.yaml
@@ -112,6 +127,9 @@ spec:
             - name: signing-key
               mountPath: /home/agent/.ssh/signing
               readOnly: true
+            {{- end }}
+            {{- with .Values.agent.extraVolumeMounts }}
+            {{- tpl (toYaml .) $ | nindent 12 }}
             {{- end }}
           livenessProbe:
             httpGet:
@@ -139,6 +157,9 @@ spec:
           secret:
             secretName: {{ .Values.git.signing.existingSecret }}
             defaultMode: 0600
+        {{- end }}
+        {{- with .Values.agent.extraVolumes }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
         {{- end }}
       {{- with .Values.agent.nodeSelector }}
       nodeSelector:
