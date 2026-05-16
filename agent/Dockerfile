@@ -21,7 +21,6 @@ RUN cargo build --release -p karna-agent \
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git curl jq openssh-client \
-    dbus gnome-keyring libsecret-1-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js (for Claude Code CLI + MCP servers)
@@ -49,16 +48,15 @@ WORKDIR /app
 COPY --from=builder /karna-agent ./karna-agent
 COPY agent/templates ./templates
 
-# Create workspace dirs, keyring dir, codex config dir, and .ssh dir owned by agent user
-RUN mkdir -p /workspace /workspace/.workspaces /home/agent/.local/share/keyrings /home/agent/.codex /home/agent/.ssh \
+# Create workspace dirs, codex config dir, and .ssh dir owned by agent user
+RUN mkdir -p /workspace /workspace/.workspaces /home/agent/.codex /home/agent/.ssh \
     && chmod 700 /home/agent/.ssh \
-    && chown -R agent:agent /workspace /app /home/agent/.local /home/agent/.codex /home/agent/.ssh
+    && chown -R agent:agent /workspace /app /home/agent/.codex /home/agent/.ssh
 
 USER agent
 
 ENV RUST_LOG=info
 
-# Git identity configured at runtime from env vars
-CMD git config --global user.name "${GIT_AUTHOR_NAME:-Karna Agent}" \
-    && git config --global user.email "${GIT_AUTHOR_EMAIL:-agent@karna.dev}" \
-    && exec dbus-run-session -- sh -c 'echo "" | gnome-keyring-daemon --unlock --components=secrets && exec ./karna-agent'
+# Exec form — karna-agent is PID 1 so SIGTERM hits it directly (no shell wrapper).
+# Git identity is configured by configure_git_auth() at startup.
+CMD ["./karna-agent"]

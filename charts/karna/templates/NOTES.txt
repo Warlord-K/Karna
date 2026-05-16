@@ -65,6 +65,15 @@ WARNING: No CLAUDE_CODE_OAUTH_TOKEN configured. The agent needs this to invoke C
 Set claude.oauthToken or claude.existingSecret in your values.
 {{- end }}
 
+{{- if gt (int .Values.agent.replicaCount) 1 }}
+
+Agent is running with {{ .Values.agent.replicaCount }} replicas. The workspace PVC must
+be ReadWriteMany. Current accessMode: {{ .Values.agent.workspace.accessMode }}{{ if eq .Values.agent.workspace.accessMode "ReadWriteOnce" }}
+WARNING: ReadWriteOnce will cause Multi-Attach errors. Set agent.workspace.accessMode
+to ReadWriteMany and pick an RWX storage class (EFS via aws-efs-csi is the recommended
+option on EKS; NFS / CephFS also work).{{ end }}
+{{- end }}
+
 {{- if .Values.auth.google.enabled }}
 
 Google OAuth is enabled. Register this callback URL in Google Cloud Console

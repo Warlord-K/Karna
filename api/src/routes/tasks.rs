@@ -251,7 +251,7 @@ pub async fn create_subtasks(
             .db
             .create_subtask(
                 id,
-                user.0,
+                task.user_id,
                 &def.title,
                 def.description.as_deref(),
                 &def.repo,

@@ -502,11 +502,17 @@ const subtaskLabels: Record<string, string> = {
 };
 
 function SubtaskRow({ task }: { task: AgentTask }) {
+  const router = useRouter();
   const color = subtaskColors[task.status] || '#b4b4bf';
   const repoName = task.repo ? (task.repo.split('/').pop() || task.repo) : '\u2014';
 
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 px-3 sm:px-4 py-2.5 sm:py-0 sm:h-11 rounded-lg hover:bg-gray-3 transition-colors">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => router.push(`/tasks/${task.id}`)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); router.push(`/tasks/${task.id}`); } }}
+      className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 px-3 sm:px-4 py-2.5 sm:py-0 sm:h-11 rounded-lg hover:bg-gray-3 transition-colors cursor-pointer">
       <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         <span
           className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${(task.status === 'planning' || task.status === 'in_progress') ? 'animate-pulse' : ''}`}

@@ -836,7 +836,7 @@ charts/karna/
     ├── pdb.yaml                  # Pod disruption budgets
     ├── ingress.yaml              # Main + agent webhook + code-server
     ├── api/                      # Deployment, Service, HPA
-    ├── agent/                    # Deployment, Service, PVC (workspace + keyring)
+    ├── agent/                    # Deployment, Service, PVC (workspace)
     ├── frontend/                 # Deployment, Service
     ├── code-server/              # Deployment, Service, PVC (optional)
     └── tests/                    # Helm test pod

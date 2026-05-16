@@ -5,7 +5,8 @@ use tracing::info;
 
 /// Configure git credential storage so fetch/push/clone all authenticate.
 /// Uses the GH_TOKEN env var which `gh` and `git credential-manager` respect,
-/// plus a store-based credential helper seeded with the token.
+/// plus a store-based credential helper seeded with the token. Also sets the
+/// commit identity from GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL (with sensible defaults).
 pub async fn configure_git_auth(github_token: &str) -> Result<()> {
     // Write a credential file git can read
     let cred_path = PathBuf::from("/tmp/.git-credentials");
@@ -27,6 +28,20 @@ pub async fn configure_git_auth(github_token: &str) -> Result<()> {
     // Tell git to use the credential store
     let _ = Command::new("git")
         .args(["config", "--global", "credential.helper", &format!("store --file={}", cred_path.display())])
+        .current_dir(git_dir)
+        .output()
+        .await;
+
+    let author_name = std::env::var("GIT_AUTHOR_NAME").unwrap_or_else(|_| "Karna Agent".to_string());
+    let author_email = std::env::var("GIT_AUTHOR_EMAIL").unwrap_or_else(|_| "agent@karna.dev".to_string());
+
+    let _ = Command::new("git")
+        .args(["config", "--global", "user.name", &author_name])
+        .current_dir(git_dir)
+        .output()
+        .await;
+    let _ = Command::new("git")
+        .args(["config", "--global", "user.email", &author_email])
         .current_dir(git_dir)
         .output()
         .await;

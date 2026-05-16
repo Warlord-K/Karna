@@ -45,17 +45,18 @@ agent:
       memory: 2Gi
   terminationGracePeriodSeconds: 600  # 10min drain for active tasks
   workspace:
+    # Shared across all agent replicas. Multi-pod scaling (replicaCount > 1) requires
+    # RWX-capable storage. On EKS this typically means EFS via the aws-efs-csi driver
+    # (preferred). Other options: NFS, CephFS. Set storageClass to your RWX class and
+    # flip accessMode to ReadWriteMany. Per-task isolation is handled by git worktrees,
+    # so worker pods don't step on each other inside the shared volume.
     storageClass: ""
     size: 50Gi
-    # Set to ReadWriteMany if scaling agents > 1 (requires RWX-capable storage like EFS/NFS)
     accessMode: ReadWriteOnce
-  keyring:
-    storageClass: ""
-    size: 1Gi
   podAnnotations: {}
   # Pod-level securityContext. fsGroup=1000 matches the `agent` user baked
   # into the karna-agent image (useradd -u 1000). Without this, the workspace
-  # and keyring PVCs mount as root:root and the agent process can't write.
+  # PVC mounts as root:root and the agent process can't write.
   # OnRootMismatch avoids a slow recursive chmod on the 50Gi workspace.
   podSecurityContext:
     fsGroup: 1000
@@ -306,6 +307,11 @@ podDisruptionBudget:
     enabled: true
     minAvailable: 1
   frontend:
+    enabled: true
+    minAvailable: 1
+  # Agent PDB only renders when agent.replicaCount > 1 (a single-replica PDB
+  # with minAvailable: 1 would block node drains entirely).
+  agent:
     enabled: true
     minAvailable: 1
 

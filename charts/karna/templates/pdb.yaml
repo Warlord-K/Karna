@@ -25,3 +25,17 @@ spec:
     matchLabels:
       {{- include "karna.selectorLabels" (dict "context" . "component" "frontend") | nindent 6 }}
 {{- end }}
+---
+{{- if and .Values.podDisruptionBudget.agent.enabled (gt (int .Values.agent.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "karna.fullname" . }}-agent
+  labels:
+    {{- include "karna.componentLabels" (dict "context" . "component" "agent") | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.agent.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "karna.selectorLabels" (dict "context" . "component" "agent") | nindent 6 }}
+{{- end }}

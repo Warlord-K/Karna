@@ -81,7 +81,6 @@ services:
       - ./config.yaml:/etc/karna/config.yaml:ro
       - ./skills:/etc/karna/skills:ro
       - ~/.codex:/home/agent/.codex
-      - agent-keyring:/home/agent/.local/share/keyrings
       - ./signing:/home/agent/.ssh/signing:ro    # Drop SSH key here → auto-signed commits
     depends_on:
       migrate: { condition: service_completed_successfully }
@@ -176,5 +175,4 @@ volumes:
   pgdata:
   redisdata:
   workspace:
-  agent-keyring:
   code-server-extensions:    # Persist installed extensions across restarts
