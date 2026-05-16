@@ -1,6 +1,7 @@
 'use client';
 
 import { AgentTask, AgentColumn as AgentColumnType, COLUMN_CONFIG } from '@/lib/agent-tasks';
+import { AgentProfile } from '@/lib/agents';
 import { TaskCard } from './task-card';
 import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -13,9 +14,11 @@ interface AgentColumnProps {
   onCreateTask?: () => void;
   /** Optional resolver for the creator badge shown in shared-workspace mode. */
   getCreatorLabel?: (task: AgentTask) => string | null;
+  /** Optional resolver for the assigned-agent badge. */
+  getAssignedAgent?: (task: AgentTask) => AgentProfile | null;
 }
 
-export function AgentColumn({ column, tasks, onTaskClick, onCreateTask, getCreatorLabel }: AgentColumnProps) {
+export function AgentColumn({ column, tasks, onTaskClick, onCreateTask, getCreatorLabel, getAssignedAgent }: AgentColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: column });
   const config = COLUMN_CONFIG[column];
 
@@ -56,6 +59,7 @@ export function AgentColumn({ column, tasks, onTaskClick, onCreateTask, getCreat
                   task={task}
                   onClick={() => onTaskClick(task)}
                   creatorLabel={getCreatorLabel ? getCreatorLabel(task) : null}
+                  assignedAgent={getAssignedAgent ? getAssignedAgent(task) : null}
                 />
               </div>
             ))}

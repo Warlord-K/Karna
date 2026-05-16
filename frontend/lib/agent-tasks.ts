@@ -35,6 +35,8 @@ export interface AgentTask {
   model: string | null;
   cost_usd: number;
   parent_task_id: string | null;
+  /** Agent profile UUID. NULL = any active agent profile picks it up. */
+  assigned_agent_id: string | null;
   /** "linear" | "clickup" — origin of an ingested task. */
   external_source: string | null;
   external_id: string | null;
@@ -136,6 +138,7 @@ export async function createTask(data: {
   cli: string | null;
   model: string | null;
   assignee_user_id?: string | null;
+  assigned_agent_id?: string | null;
 }): Promise<AgentTask> {
   const res = await fetch(API_BASE, {
     method: 'POST',
@@ -292,6 +295,7 @@ export async function createTaskWithImages(
     cli: string | null;
     model: string | null;
     assignee_user_id?: string | null;
+    assigned_agent_id?: string | null;
   },
   images: File[],
 ): Promise<AgentTask> {

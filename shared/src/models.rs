@@ -104,6 +104,9 @@ pub struct AgentTask {
     pub external_source: Option<String>,
     pub external_id: Option<String>,
     pub external_url: Option<String>,
+    /// NULL = any active agent profile may pick it up.
+    /// Set = only the named agent profile picks it up.
+    pub assigned_agent_id: Option<Uuid>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
@@ -258,6 +261,28 @@ pub struct ScheduledRunLog {
     pub level: String,
     pub message: String,
     pub created_at: Option<DateTime<Utc>>,
+}
+
+// --- Agent profile models ---
+
+/// A named agent identity (e.g. "Sonnet", "Codex GPT-5.4"). Profiles are
+/// auto-seeded from config.yaml on agent startup, one per (cli, model) pair,
+/// and can be renamed / paused / extended by the user.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct AgentProfile {
+    pub id: Uuid,
+    pub slug: String,
+    pub name: String,
+    pub avatar_emoji: String,
+    pub cli: String,
+    pub model: String,
+    pub system_prompt_addendum: Option<String>,
+    /// NULL = active. Set = paused with a human-readable reason; the worker
+    /// will not claim tasks assigned to this profile while paused.
+    pub paused_reason: Option<String>,
+    pub is_default: bool,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 // --- Repo profile models ---

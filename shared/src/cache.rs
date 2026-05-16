@@ -123,3 +123,4 @@ pub fn schedule_run_logs_key(run_id: Uuid) -> String {
 
 pub const REPOS_LIST_KEY: &str = "cache:repos:list";
 pub const CONFIG_KEY: &str = "cache:config";
+pub const AGENTS_LIST_KEY: &str = "cache:agents:list";

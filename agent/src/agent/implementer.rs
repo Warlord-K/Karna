@@ -92,20 +92,20 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
 
     // 4. Run CLI backend (Claude Code or Codex)
     let mcp_json_str = merged_mcp.map(|v| v.to_string());
-    let cli_name = task.cli.as_deref().unwrap_or_else(|| config.default_cli());
-    let model = task.model.as_deref().unwrap_or_else(|| config.default_model(cli_name));
+    let (cli_name, model, addendum) = super::resolve_runtime(db, task, config).await;
+    let system_prompt = super::merge_system_prompt(config.instructions.as_deref(), addendum.as_deref());
 
     db.insert_log(task.id, "implement", &format!("Invoking {cli_name} ({model}) for implementation"), "command", None).await?;
 
     let event_tx = super::spawn_log_consumer(db.clone(), task.id, "implement");
 
-    let result = cli::run(cli_name, CliOptions {
+    let result = cli::run(&cli_name, CliOptions {
         working_dir,
         prompt: &prompt,
-        system_prompt: config.instructions.as_deref(),
+        system_prompt: system_prompt.as_deref(),
         allowed_tools: Some("Read,Write,Edit,Glob,Grep,Bash"),
         max_turns: config.max_turns,
-        model,
+        model: &model,
         mcp_config_json: mcp_json_str,
         session_id: None,
         resume: false,
@@ -312,8 +312,8 @@ Description: {description}
     append_skills_to_prompt(&mut prompt, &global_skills, &repo_skills, "implement");
 
     let mcp_json_str = merged_mcp.map(|v| v.to_string());
-    let cli_name = task.cli.as_deref().unwrap_or_else(|| config.default_cli());
-    let model = task.model.as_deref().unwrap_or_else(|| config.default_model(cli_name));
+    let (cli_name, model, addendum) = super::resolve_runtime(db, task, config).await;
+    let system_prompt = super::merge_system_prompt(config.instructions.as_deref(), addendum.as_deref());
 
     let has_session = task.agent_session_id.is_some();
     if has_session {
@@ -324,13 +324,13 @@ Description: {description}
 
     let event_tx = super::spawn_log_consumer(db.clone(), task.id, "feedback");
 
-    let result = cli::run(cli_name, CliOptions {
+    let result = cli::run(&cli_name, CliOptions {
         working_dir,
         prompt: &prompt,
-        system_prompt: config.instructions.as_deref(),
+        system_prompt: system_prompt.as_deref(),
         allowed_tools: Some("Read,Write,Edit,Glob,Grep,Bash"),
         max_turns: config.max_turns,
-        model,
+        model: &model,
         mcp_config_json: mcp_json_str.clone(),
         session_id: task.agent_session_id.as_deref(),
         resume: has_session,
@@ -346,13 +346,13 @@ Description: {description}
             info!(task_id = %task.id, error = %e, "Session resume failed, retrying without session");
             db.insert_log(task.id, "feedback", "Session expired, retrying with fresh session", "warning", None).await?;
             let event_tx = super::spawn_log_consumer(db.clone(), task.id, "feedback");
-            cli::run(cli_name, CliOptions {
+            cli::run(&cli_name, CliOptions {
                 working_dir,
                 prompt: &prompt,
-                system_prompt: config.instructions.as_deref(),
+                system_prompt: system_prompt.as_deref(),
                 allowed_tools: Some("Read,Write,Edit,Glob,Grep,Bash"),
                 max_turns: config.max_turns,
-                model,
+                model: &model,
                 mcp_config_json: mcp_json_str,
                 session_id: None,
                 resume: false,

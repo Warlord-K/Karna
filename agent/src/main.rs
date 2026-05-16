@@ -15,6 +15,7 @@ mod git;
 mod models;
 mod notifications;
 mod onboarding;
+mod profiles;
 mod queue;
 mod scheduler;
 mod updater;
@@ -81,6 +82,13 @@ async fn main() -> anyhow::Result<()> {
         .with_redis(redis.clone())
         .with_shared_workspace(shared_workspace);
     info!("Connected to Postgres");
+
+    // Seed agent profiles from config backends (one per cli × model pair).
+    // Idempotent — existing rows by slug are left alone, including user renames.
+    match profiles::seed_from_config(&config, &db).await {
+        Ok(()) => {}
+        Err(e) => warn!(error = %e, "Failed to seed agent profiles"),
+    }
 
     // Sync config-defined schedules to database
     match scheduler::sync_config_schedules(&config, &db).await {

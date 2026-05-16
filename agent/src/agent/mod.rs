@@ -9,8 +9,55 @@ use crate::cli::{EventSender, StreamEvent};
 use crate::config::Config;
 use crate::db::Database;
 use crate::git::workspace;
-use crate::models::TaskStatus;
+use crate::models::{AgentTask, TaskStatus};
 use crate::queue;
+
+/// Resolve which CLI + model + agent-specific system prompt to use for a task.
+///
+/// Precedence:
+///   1. task.cli / task.model — explicit per-task override
+///   2. assigned_agent_profile.cli / .model — when assigned_agent_id is set
+///   3. config defaults
+///
+/// The third element is the agent profile's `system_prompt_addendum`, appended
+/// to the global instructions file (if any) at CLI invocation time.
+pub async fn resolve_runtime(
+    db: &Database,
+    task: &AgentTask,
+    config: &Config,
+) -> (String, String, Option<String>) {
+    let profile = match task.assigned_agent_id {
+        Some(id) => db.get_agent_profile(id).await.ok().flatten(),
+        None => None,
+    };
+
+    let cli = task
+        .cli
+        .clone()
+        .or_else(|| profile.as_ref().map(|p| p.cli.clone()))
+        .unwrap_or_else(|| config.default_cli().to_string());
+
+    let model = task
+        .model
+        .clone()
+        .or_else(|| profile.as_ref().map(|p| p.model.clone()))
+        .unwrap_or_else(|| config.default_model(&cli).to_string());
+
+    let addendum = profile.and_then(|p| p.system_prompt_addendum);
+
+    (cli, model, addendum)
+}
+
+/// Merge the global instructions file with an agent profile's system prompt
+/// addendum, returning whatever should be passed as `CliOptions.system_prompt`.
+pub fn merge_system_prompt(global: Option<&str>, addendum: Option<&str>) -> Option<String> {
+    match (global, addendum) {
+        (Some(g), Some(a)) => Some(format!("{g}\n\n{a}")),
+        (Some(g), None) => Some(g.to_string()),
+        (None, Some(a)) => Some(a.to_string()),
+        (None, None) => None,
+    }
+}
 
 /// Spawn a background task that consumes CLI stream events and inserts them as agent logs.
 /// Returns the sender half — pass it to `CliOptions.event_tx`.

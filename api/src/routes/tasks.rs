@@ -24,6 +24,10 @@ pub struct CreateTask {
     model: Option<String>,
     /// User UUID. NULL = pick up by agent (existing behavior).
     assignee_user_id: Option<Uuid>,
+    /// Agent profile UUID. NULL = any agent picks it up.
+    /// Mutually exclusive with assignee_user_id at the frontend, but the DB
+    /// accepts either independently so callers can model intent precisely.
+    assigned_agent_id: Option<Uuid>,
     /// "linear" | "clickup" — only set when ingesting from an external system.
     external_source: Option<String>,
     external_id: Option<String>,
@@ -65,6 +69,7 @@ pub async fn create(
             body.cli.as_deref(),
             body.model.as_deref(),
             body.assignee_user_id,
+            body.assigned_agent_id,
             body.external_source.as_deref(),
             body.external_id.as_deref(),
             body.external_url.as_deref(),

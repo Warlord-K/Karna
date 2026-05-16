@@ -353,7 +353,8 @@ pub async fn linear_webhook(
             priority,
             None,
             None,
-            None, // assignee — default to agent
+            None, // human assignee — default to agent
+            None, // assigned_agent_id — default profile (any agent)
             Some("linear"),
             Some(external_id),
             if url.is_empty() { None } else { Some(url) },
@@ -502,7 +503,8 @@ pub async fn clickup_webhook(
             priority,
             None,
             None,
-            None,
+            None, // human assignee — default to agent
+            None, // assigned_agent_id — default profile (any agent)
             Some("clickup"),
             Some(task_id),
             Some(&external_url),

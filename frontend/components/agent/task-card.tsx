@@ -1,6 +1,7 @@
 'use client';
 
 import { AgentTask, PRIORITY_COLORS, getTaskLabel, getTaskTitle } from '@/lib/agent-tasks';
+import { AgentProfile } from '@/lib/agents';
 import { GitPullRequest, WarningCircle, Lightning, Stack, Clock, User } from '@phosphor-icons/react';
 import { formatDistanceToNow } from 'date-fns';
 import { useSortable } from '@dnd-kit/sortable';
@@ -26,9 +27,11 @@ interface TaskCardProps {
    * task they're touching).
    */
   creatorLabel?: string | null;
+  /** Agent profile this task is assigned to (resolved from task.assigned_agent_id). */
+  assignedAgent?: AgentProfile | null;
 }
 
-export function TaskCard({ task, onClick, creatorLabel }: TaskCardProps) {
+export function TaskCard({ task, onClick, creatorLabel, assignedAgent }: TaskCardProps) {
   const {
     attributes, listeners, setNodeRef, transform, transition, isDragging,
   } = useSortable({ id: task.id });
@@ -109,6 +112,19 @@ export function TaskCard({ task, onClick, creatorLabel }: TaskCardProps) {
             className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 h-4 rounded-sm bg-blue-500/15 border border-blue-500/30 text-blue-400 flex-shrink-0"
           >
             <User size={10} weight="bold" /> Human
+          </span>
+        )}
+        {!task.assignee_user_id && assignedAgent && (
+          <span
+            title={assignedAgent.paused_reason ? `${assignedAgent.name} (paused: ${assignedAgent.paused_reason})` : `Assigned to ${assignedAgent.name}`}
+            className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 h-4 rounded-sm border flex-shrink-0 max-w-[120px] truncate ${
+              assignedAgent.paused_reason
+                ? 'bg-amber-500/15 border-amber-500/30 text-amber-400'
+                : 'bg-purple-500/15 border-purple-500/30 text-purple-400'
+            }`}
+          >
+            <span aria-hidden>{assignedAgent.avatar_emoji}</span>
+            <span className="truncate">{assignedAgent.name}</span>
           </span>
         )}
         {creatorLabel && (

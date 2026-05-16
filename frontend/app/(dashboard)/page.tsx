@@ -12,7 +12,7 @@ import {
   getColumnForStatus,
   AgentTaskStatus,
 } from '@/lib/agent-tasks';
-import { useTasks, useConfig, useUsers } from '@/hooks/use-tasks';
+import { useTasks, useConfig, useUsers, useAgents } from '@/hooks/use-tasks';
 import { userDisplayName } from '@/lib/agent-tasks';
 import { AgentColumn } from '@/components/agent/agent-column';
 import { Plus, ArrowsClockwise } from '@phosphor-icons/react';
@@ -36,6 +36,7 @@ export default function BoardPage() {
   const { data: config } = useConfig(isReady);
   const sharedWorkspace = config?.sharedWorkspace ?? false;
   const { data: users = [] } = useUsers(isReady && sharedWorkspace);
+  const { data: agents = [] } = useAgents(isReady);
   const currentUserId = (session?.user as { id?: string } | undefined)?.id;
 
   const getCreatorLabel = (task: AgentTask): string | null => {
@@ -43,6 +44,11 @@ export default function BoardPage() {
     if (!task.user_id || task.user_id === currentUserId) return null;
     const u = users.find((u) => u.id === task.user_id);
     return u ? userDisplayName(u) : null;
+  };
+
+  const getAssignedAgent = (task: AgentTask) => {
+    if (!task.assigned_agent_id) return null;
+    return agents.find((a) => a.id === task.assigned_agent_id) ?? null;
   };
 
   const sensors = useSensors(
@@ -140,6 +146,7 @@ export default function BoardPage() {
                 onTaskClick={handleTaskClick}
                 onCreateTask={column === 'todo' ? handleNewTask : undefined}
                 getCreatorLabel={getCreatorLabel}
+                getAssignedAgent={getAssignedAgent}
               />
             ))}
           </div>

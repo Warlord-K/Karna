@@ -98,6 +98,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/repos/{id}/onboard", post(routes::repos::trigger_onboard))
         // Users (for assignee dropdown)
         .route("/users", get(routes::users::list))
+        // Agent profiles (pseudo-users)
+        .route("/agents", get(routes::agents::list).post(routes::agents::create))
+        .route(
+            "/agents/{id}",
+            patch(routes::agents::update).delete(routes::agents::delete),
+        )
+        // Unified assignee picker (humans + agents)
+        .route("/assignables", get(routes::agents::assignables))
         // Config
         .route("/config", get(routes::config::get))
         // Auth middleware on all routes

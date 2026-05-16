@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::cache;
-use crate::models::{AgentLog, AgentTask, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment};
+use crate::models::{AgentLog, AgentProfile, AgentTask, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment};
 
 #[derive(Clone)]
 pub struct Database {
@@ -87,6 +87,13 @@ impl Database {
             r#"SELECT t.* FROM agent_tasks t
                WHERE t.status IN ('todo', 'planning', 'in_progress')
                AND t.assignee_user_id IS NULL
+               AND (
+                 t.assigned_agent_id IS NULL
+                 OR EXISTS (
+                   SELECT 1 FROM agent_profiles p
+                   WHERE p.id = t.assigned_agent_id AND p.paused_reason IS NULL
+                 )
+               )
                AND NOT EXISTS (
                  SELECT 1 FROM agent_tasks sub WHERE sub.parent_task_id = t.id
                )
@@ -105,6 +112,13 @@ impl Database {
             r#"SELECT t.id FROM agent_tasks t
                WHERE t.status IN ('planning', 'in_progress')
                AND t.assignee_user_id IS NULL
+               AND (
+                 t.assigned_agent_id IS NULL
+                 OR EXISTS (
+                   SELECT 1 FROM agent_profiles p
+                   WHERE p.id = t.assigned_agent_id AND p.paused_reason IS NULL
+                 )
+               )
                AND NOT EXISTS (
                  SELECT 1 FROM agent_tasks sub WHERE sub.parent_task_id = t.id
                )"#,
@@ -116,11 +130,18 @@ impl Database {
 
     pub async fn tasks_with_pending_feedback(&self) -> Result<Vec<AgentTask>> {
         let tasks = sqlx::query_as::<_, AgentTask>(
-            r#"SELECT * FROM agent_tasks
-               WHERE status IN ('review', 'plan_review')
-               AND feedback IS NOT NULL AND feedback != ''
-               AND assignee_user_id IS NULL
-               ORDER BY updated_at ASC"#,
+            r#"SELECT t.* FROM agent_tasks t
+               WHERE t.status IN ('review', 'plan_review')
+               AND t.feedback IS NOT NULL AND t.feedback != ''
+               AND t.assignee_user_id IS NULL
+               AND (
+                 t.assigned_agent_id IS NULL
+                 OR EXISTS (
+                   SELECT 1 FROM agent_profiles p
+                   WHERE p.id = t.assigned_agent_id AND p.paused_reason IS NULL
+                 )
+               )
+               ORDER BY t.updated_at ASC"#,
         )
         .fetch_all(&self.pool)
         .await?;
@@ -180,7 +201,7 @@ impl Database {
     ) -> Result<AgentTask> {
         self.create_task_full(
             user_id, title, description, repo, priority, cli, model,
-            None, None, None, None,
+            None, None, None, None, None,
         )
         .await
     }
@@ -197,6 +218,7 @@ impl Database {
         cli: Option<&str>,
         model: Option<&str>,
         assignee_user_id: Option<Uuid>,
+        assigned_agent_id: Option<Uuid>,
         external_source: Option<&str>,
         external_id: Option<&str>,
         external_url: Option<&str>,
@@ -204,9 +226,10 @@ impl Database {
         let task = sqlx::query_as::<_, AgentTask>(
             r#"INSERT INTO agent_tasks (
                  user_id, title, description, repo, priority, position, cli, model,
-                 assignee_user_id, external_source, external_id, external_url
+                 assignee_user_id, assigned_agent_id,
+                 external_source, external_id, external_url
                )
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                RETURNING *"#,
         )
         .bind(user_id)
@@ -218,6 +241,7 @@ impl Database {
         .bind(cli)
         .bind(model)
         .bind(assignee_user_id)
+        .bind(assigned_agent_id)
         .bind(external_source)
         .bind(external_id)
         .bind(external_url)
@@ -238,7 +262,8 @@ impl Database {
             "title", "description", "repo", "target_branch", "status", "priority",
             "position", "branch", "pr_url", "pr_number", "plan_content", "feedback",
             "agent_session_id", "error_message", "cli", "model",
-            "assignee_user_id", "external_source", "external_id", "external_url",
+            "assignee_user_id", "assigned_agent_id",
+            "external_source", "external_id", "external_url",
         ];
 
         let mut set_clauses = Vec::new();
@@ -1228,6 +1253,190 @@ impl Database {
         .fetch_one(&self.pool)
         .await?;
         Ok(count > 0)
+    }
+
+    // --- Agent profile queries ---
+
+    pub async fn list_agent_profiles(&self) -> Result<Vec<AgentProfile>> {
+        let rows = sqlx::query_as::<_, AgentProfile>(
+            "SELECT * FROM agent_profiles ORDER BY is_default DESC, name ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_agent_profile(&self, id: Uuid) -> Result<Option<AgentProfile>> {
+        let row = sqlx::query_as::<_, AgentProfile>(
+            "SELECT * FROM agent_profiles WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Insert a profile if no row with this slug exists. Returns the row in either case.
+    /// Used by the agent's startup auto-seed.
+    pub async fn upsert_agent_profile_by_slug(
+        &self,
+        slug: &str,
+        name: &str,
+        cli: &str,
+        model: &str,
+        is_default: bool,
+    ) -> Result<AgentProfile> {
+        // INSERT ... ON CONFLICT DO NOTHING leaves us without RETURNING when the row
+        // already exists, so split the seed path: try insert, then fetch.
+        let inserted = sqlx::query_as::<_, AgentProfile>(
+            r#"INSERT INTO agent_profiles (slug, name, cli, model, is_default)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (slug) DO NOTHING
+               RETURNING *"#,
+        )
+        .bind(slug)
+        .bind(name)
+        .bind(cli)
+        .bind(model)
+        .bind(is_default)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = inserted {
+            self.bust_agents().await;
+            return Ok(row);
+        }
+
+        let row = sqlx::query_as::<_, AgentProfile>(
+            "SELECT * FROM agent_profiles WHERE slug = $1",
+        )
+        .bind(slug)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_agent_profile(
+        &self,
+        slug: &str,
+        name: &str,
+        cli: &str,
+        model: &str,
+        avatar_emoji: &str,
+        system_prompt_addendum: Option<&str>,
+    ) -> Result<AgentProfile> {
+        let row = sqlx::query_as::<_, AgentProfile>(
+            r#"INSERT INTO agent_profiles
+                 (slug, name, cli, model, avatar_emoji, system_prompt_addendum)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               RETURNING *"#,
+        )
+        .bind(slug)
+        .bind(name)
+        .bind(cli)
+        .bind(model)
+        .bind(avatar_emoji)
+        .bind(system_prompt_addendum)
+        .fetch_one(&self.pool)
+        .await?;
+        self.bust_agents().await;
+        Ok(row)
+    }
+
+    /// Update mutable fields on an agent profile. Whitelisted fields only.
+    pub async fn update_agent_profile(
+        &self,
+        id: Uuid,
+        updates: &serde_json::Value,
+    ) -> Result<u64> {
+        let obj = match updates.as_object() {
+            Some(o) => o,
+            None => return Ok(0),
+        };
+
+        let mut set_parts: Vec<String> = Vec::new();
+        let mut bind_idx = 1u32;
+        let mut string_vals: Vec<Option<String>> = Vec::new();
+
+        let text_fields = [
+            "name",
+            "avatar_emoji",
+            "cli",
+            "model",
+            "system_prompt_addendum",
+            "paused_reason",
+        ];
+        for field in &text_fields {
+            if let Some(val) = obj.get(*field) {
+                set_parts.push(format!("\"{}\" = ${}", field, bind_idx));
+                string_vals.push(match val {
+                    serde_json::Value::Null => None,
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    other => Some(other.to_string()),
+                });
+                bind_idx += 1;
+            }
+        }
+
+        if let Some(val) = obj.get("is_default") {
+            if let Some(b) = val.as_bool() {
+                // Demote the previous default first; we can't have two.
+                if b {
+                    sqlx::query("UPDATE agent_profiles SET is_default = FALSE WHERE is_default = TRUE AND id <> $1")
+                        .bind(id)
+                        .execute(&self.pool)
+                        .await?;
+                }
+                set_parts.push(format!("is_default = {}", b));
+            }
+        }
+
+        if set_parts.is_empty() {
+            return Ok(0);
+        }
+
+        set_parts.push("updated_at = NOW()".to_string());
+
+        let sql = format!(
+            "UPDATE agent_profiles SET {} WHERE id = ${}",
+            set_parts.join(", "),
+            bind_idx,
+        );
+
+        let mut query = sqlx::query(&sql);
+        for val in &string_vals {
+            match val {
+                Some(s) => query = query.bind(s),
+                None => query = query.bind(None::<String>),
+            }
+        }
+        query = query.bind(id);
+
+        let result = query.execute(&self.pool).await?;
+        if result.rows_affected() > 0 {
+            self.bust_agents().await;
+        }
+        Ok(result.rows_affected())
+    }
+
+    pub async fn delete_agent_profile(&self, id: Uuid) -> Result<u64> {
+        // FK on agent_tasks.assigned_agent_id uses ON DELETE SET NULL — tasks
+        // assigned to this profile drop back to "any agent" instead of being deleted.
+        let result = sqlx::query("DELETE FROM agent_profiles WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if result.rows_affected() > 0 {
+            self.bust_agents().await;
+            self.bust_tasks(None).await;
+        }
+        Ok(result.rows_affected())
+    }
+
+    async fn bust_agents(&self) {
+        let Some(r) = &self.redis else { return };
+        cache::invalidate(r, cache::AGENTS_LIST_KEY).await;
     }
 
     #[allow(clippy::too_many_arguments)]

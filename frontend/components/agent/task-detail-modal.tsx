@@ -19,6 +19,7 @@ import {
   useApproveWithSubtasks,
   usePostComment,
   useUsers,
+  useAgents,
 } from '@/hooks/use-tasks';
 import {
   Trash, GitPullRequest, ArrowSquareOut, Check, X, Prohibit,
@@ -64,6 +65,7 @@ export function TaskDetailModal({ task, onClose, onUpdate, onDelete }: TaskDetai
   const { data: subtasks = [] } = useSubtasks(taskId, activeTab === 'subtasks');
   const { data: logs = [], isLoading: logsLoading } = useLogs(taskId, activeTab === 'activity');
   const { data: users = [] } = useUsers(!!task);
+  const { data: agents = [] } = useAgents(!!task);
   const approveSubtasksMutation = useApproveWithSubtasks();
   const postCommentMutation = usePostComment();
 
@@ -74,10 +76,27 @@ export function TaskDetailModal({ task, onClose, onUpdate, onDelete }: TaskDetai
   if (!task) return null;
 
   const handlePriorityChange = async (p: AgentTaskPriority) => { await onUpdate(task.id, { priority: p }); };
-  const handleAssigneeChange = async (assigneeUserId: string | null) => {
-    await onUpdate(task.id, { assignee_user_id: assigneeUserId });
-    toast.success(assigneeUserId ? 'Assigned to human' : 'Handed back to agent');
+  const handleAssigneeChange = async (value: string) => {
+    // value: "" = any agent, "agent:<id>" = specific agent profile, "user:<id>" = human
+    const [kind, id] = value ? value.split(':') : ['', ''];
+    await onUpdate(task.id, {
+      assignee_user_id: kind === 'user' ? id : null,
+      assigned_agent_id: kind === 'agent' ? id : null,
+    });
+    if (kind === 'user') toast.success('Assigned to human');
+    else if (kind === 'agent') {
+      const profile = agents.find((a) => a.id === id);
+      toast.success(`Assigned to ${profile ? profile.name : 'agent'}`);
+    } else toast.success('Handed back to any agent');
   };
+
+  const currentAssignment: string = task
+    ? task.assignee_user_id
+      ? `user:${task.assignee_user_id}`
+      : task.assigned_agent_id
+        ? `agent:${task.assigned_agent_id}`
+        : ''
+    : '';
 
   const handleApprovePlan = async () => {
     setLoading(true);
@@ -247,37 +266,35 @@ export function TaskDetailModal({ task, onClose, onUpdate, onDelete }: TaskDetai
                 editable={['todo', 'plan_review', 'planning'].includes(task.status)}
               />
 
-              {/* Assignee */}
+              {/* Assignee — any agent (default), a specific agent profile, or a human */}
               <div className="flex items-center gap-2.5 pt-4 border-t border-gray-3">
-                {task.assignee_user_id ? <User size={14} weight="bold" className="text-blue-400" /> : <Robot size={14} weight="bold" className="text-gray-8" />}
+                {task.assignee_user_id
+                  ? <User size={14} weight="bold" className="text-blue-400" />
+                  : <Robot size={14} weight="bold" className="text-gray-8" />}
                 <span className="text-[13px] text-gray-9 font-medium">Assigned to</span>
-                <div className="flex gap-1.5 ml-auto">
-                  <button
-                    type="button"
-                    onClick={() => handleAssigneeChange(null)}
-                    className={`h-7 px-2.5 rounded-md text-[12px] font-medium transition-all duration-150 border flex items-center gap-1 ${
-                      !task.assignee_user_id
-                        ? 'bg-gray-3 border-gray-5 text-gray-12'
-                        : 'bg-transparent border-gray-4 text-gray-8 hover:text-gray-11 hover:bg-gray-3'
-                    }`}
-                  >
-                    <Robot size={12} weight="bold" /> Agent
-                  </button>
-                  <select
-                    value={task.assignee_user_id ?? ''}
-                    onChange={(e) => handleAssigneeChange(e.target.value || null)}
-                    className={`h-7 px-2 rounded-md text-[12px] border cursor-pointer focus:outline-none ${
-                      task.assignee_user_id
-                        ? 'bg-gray-3 border-gray-5 text-gray-12'
-                        : 'bg-transparent border-gray-4 text-gray-8 hover:text-gray-11'
-                    }`}
-                  >
-                    <option value="">A human...</option>
-                    {users.map((u: UserSummary) => (
-                      <option key={u.id} value={u.id}>{userDisplayName(u)}</option>
-                    ))}
-                  </select>
-                </div>
+                <select
+                  value={currentAssignment}
+                  onChange={(e) => handleAssigneeChange(e.target.value)}
+                  className="h-7 px-2 rounded-md text-[12px] border bg-gray-3 border-gray-5 text-gray-12 cursor-pointer focus:outline-none ml-auto"
+                >
+                  <option value="">Any agent</option>
+                  {agents.length > 0 && (
+                    <optgroup label="Agents">
+                      {agents.map((a) => (
+                        <option key={a.id} value={`agent:${a.id}`} disabled={!!a.paused_reason}>
+                          {a.avatar_emoji} {a.name}{a.paused_reason ? ' (paused)' : ''}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {users.length > 0 && (
+                    <optgroup label="Humans">
+                      {users.map((u: UserSummary) => (
+                        <option key={u.id} value={`user:${u.id}`}>{userDisplayName(u)}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
               </div>
 
               {/* External source */}

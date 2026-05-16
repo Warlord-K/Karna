@@ -15,6 +15,7 @@ import {
   postComment,
   nestSubtasks,
 } from '@/lib/agent-tasks';
+import { AgentProfile, fetchAgents } from '@/lib/agents';
 import toast from 'react-hot-toast';
 
 export const taskKeys = {
@@ -24,6 +25,7 @@ export const taskKeys = {
   logs: (taskId: string) => [...taskKeys.all, 'logs', taskId] as const,
   config: ['config'] as const,
   users: ['users'] as const,
+  agents: ['agents'] as const,
 };
 
 interface AppConfig {
@@ -91,6 +93,15 @@ export function useUsers(enabled: boolean = true) {
   return useQuery<UserSummary[]>({
     queryKey: taskKeys.users,
     queryFn: ({ signal }) => fetchUsers(signal),
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
+export function useAgents(enabled: boolean = true) {
+  return useQuery<AgentProfile[]>({
+    queryKey: taskKeys.agents,
+    queryFn: ({ signal }) => fetchAgents(signal),
     enabled,
     staleTime: 60_000,
   });

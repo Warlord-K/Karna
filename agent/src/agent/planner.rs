@@ -157,8 +157,8 @@ Rules for subtasks:
         ));
     }
 
-    let cli_name = task.cli.as_deref().unwrap_or_else(|| config.default_cli());
-    let model = task.model.as_deref().unwrap_or_else(|| config.default_model(cli_name));
+    let (cli_name, model, addendum) = super::resolve_runtime(db, task, config).await;
+    let system_prompt = super::merge_system_prompt(config.instructions.as_deref(), addendum.as_deref());
     db.insert_log(task.id, "plan", &format!("Invoking {cli_name} ({model}) for planning"), "command", None).await?;
 
     // Write merged MCP config
@@ -167,13 +167,13 @@ Rules for subtasks:
     // Stream CLI events as agent logs so the user can watch progress
     let event_tx = super::spawn_log_consumer(db.clone(), task.id, "plan");
 
-    let result = cli::run(cli_name, CliOptions {
+    let result = cli::run(&cli_name, CliOptions {
         working_dir,
         prompt: &prompt,
-        system_prompt: config.instructions.as_deref(),
+        system_prompt: system_prompt.as_deref(),
         allowed_tools: Some("Read,Glob,Grep,Bash"),
         max_turns: 50,
-        model,
+        model: &model,
         mcp_config_json: mcp_json_str,
         session_id: None,
         resume: false,

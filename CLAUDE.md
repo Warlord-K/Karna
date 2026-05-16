@@ -83,7 +83,9 @@ karna/
 │   ├── 011_cancelled_status.sql # Cancelled task status
 │   ├── 012_task_attachments.sql # Task image attachments
 │   ├── 013_repo_sync_issues.sql # Per-repo GitHub issue sync toggle
-│   └── 014_assignee_and_external.sql # Human assignment + Linear/ClickUp source fields
+│   ├── 014_assignee_and_external.sql # Human assignment + Linear/ClickUp source fields
+│   ├── 015_webhook_status.sql   # Per-repo webhook registration outcome (status/url/error)
+│   └── 016_agent_profiles.sql   # Named agent identities + agent_tasks.assigned_agent_id
 ├── Cargo.toml                   # Workspace root (members: agent, api, shared)
 ├── shared/
 │   ├── Cargo.toml
@@ -168,10 +170,12 @@ karna/
   - `cli` (TEXT, nullable) — CLI backend ("claude", "codex"); NULL = config default
   - `model` (TEXT, nullable) — Model name ("sonnet", "gpt-5.4"); NULL = backend default
   - `assignee_user_id` (UUID, nullable) — NULL = agent picks up; set = assigned to a human (agent skips)
+  - `assigned_agent_id` (UUID, nullable) — FK to `agent_profiles.id`. NULL = any agent profile picks it up; set = only that named agent profile picks it up
   - `external_source` (TEXT, nullable) — origin if ingested ("linear" or "clickup")
   - `external_id` (TEXT, nullable) — ID in the external system (unique with source)
   - `external_url` (TEXT, nullable) — direct link to the external task
 - `agent_logs` — Append-only agent activity log per task (includes user comments with `log_type = 'comment'`)
+- `agent_profiles` — Named agent identities (one per `(cli, model)` from config, auto-seeded on startup); see "Agent Profiles" section below
 
 ### Schedule tables
 - `schedules` — Schedule definitions (cron or one-shot), prompt, repos, skills, MCP servers, task creation config
@@ -280,6 +284,11 @@ All data routes are served by the Rust API (`api/`). The frontend proxies `/api/
 | DELETE | /api/repos/{id} | Delete repo profile |
 | POST | /api/repos/{id}/onboard | Trigger re-onboarding for a repo |
 | GET | /api/users | List users (id, name, email) for assignee dropdown |
+| GET | /api/agents | List agent profiles (Redis-cached) |
+| POST | /api/agents | Create custom agent profile |
+| PATCH | /api/agents/{id} | Update profile (rename, pause/unpause, set default) |
+| DELETE | /api/agents/{id} | Delete profile (tasks fall back to "any agent") |
+| GET | /api/assignables | Unified list of agents + humans for the assignee picker |
 | GET | /api/config | Config (repos, backends, skills, MCP servers) |
 
 **Frontend (Next.js, :3000) — auth only:**
@@ -437,6 +446,38 @@ Every task has an `assignee_user_id`. NULL = the agent picks it up (default, ori
 
 **User list source:** `GET /api/users` (filters out the default system user — that ID represents "no human", not a person).
 
+## Agent Profiles (Named Pseudo-Users)
+
+Agents have identities. Instead of an anonymous "the agent," each (cli, model) pair from `config.yaml` becomes a named pseudo-user (e.g. "Claude Sonnet", "Codex GPT-5.4") that shows up next to humans in the assignee dropdown. A task can be assigned to a specific agent profile and only that profile picks it up.
+
+**Table:** [agent_profiles](migrations/016_agent_profiles.sql) — `(id, slug UNIQUE, name, avatar_emoji, cli, model, system_prompt_addendum, paused_reason, is_default)`. Slug is the natural key (e.g. `claude-sonnet`) so renames don't break startup seeding.
+
+**Assignment semantics on `agent_tasks`:**
+
+| `assignee_user_id` | `assigned_agent_id` | Behavior |
+|---|---|---|
+| SET | any | Human owns it; agent skips (existing behavior) |
+| NULL | NULL | Any active agent profile picks it up (existing default) |
+| NULL | SET | Only that specific agent profile picks it up; if it's paused, the task waits |
+
+**Pickup filter** (`next_actionable_task` / `active_task_ids` / `tasks_with_pending_feedback` in [shared/src/db.rs](shared/src/db.rs)): `AND (assigned_agent_id IS NULL OR EXISTS (SELECT 1 FROM agent_profiles p WHERE p.id = t.assigned_agent_id AND p.paused_reason IS NULL))`. The worker is generic — any agent process can run any profile's `(cli, model)`. Pausing a profile (setting `paused_reason`) blocks pickup of its tasks without affecting tasks assigned to other profiles.
+
+**Runtime resolution** ([agent/src/agent/mod.rs](agent/src/agent/mod.rs) — `resolve_runtime`): precedence is `task.cli/.model` → `assigned_profile.cli/.model` → `config.default_cli/.default_model`. The profile's `system_prompt_addendum` is appended to the global instructions file at CLI invocation time via `merge_system_prompt`, so per-agent personas (style, focus areas) stack on top of the cross-repo instructions file.
+
+**Auto-seeding** ([agent/src/profiles.rs](agent/src/profiles.rs)): on agent startup, `seed_from_config` inserts one row per `(cli, model)` from `config.agent.backends`, slugged and titled (e.g. "Claude Sonnet"). Idempotent on slug — existing rows are left alone, so user renames stick. The default profile is the `(default_cli, default_model)` pair.
+
+**API:**
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | /api/agents | List all profiles (Redis-cached, key `cache:agents:list`) |
+| POST | /api/agents | Create a custom profile (e.g. a Sonnet persona with a strict style addendum) |
+| PATCH | /api/agents/{id} | Rename, change emoji/cli/model, pause/unpause, set as default |
+| DELETE | /api/agents/{id} | Delete (FK is `ON DELETE SET NULL` so tasks drop back to "any agent") |
+| GET | /api/assignables | Unified `{type: "agent"\|"user", ...}` list for the frontend assignee picker |
+
+**Frontend:** the assignee picker in [tasks/new/page.tsx](frontend/app/(dashboard)/tasks/new/page.tsx) and [task-detail-modal.tsx](frontend/components/agent/task-detail-modal.tsx) is a single `<select>` with optgroups (`Any agent` default, then `Agents`, then `Humans`). Paused profiles render as disabled options. TaskCard shows a purple badge with the assigned agent's emoji + name when set; amber when the assigned agent is paused. Encoded picker value is `""` / `agent:<id>` / `user:<id>` for serialization through to the API.
+
 ## Shared Workspace Mode (Small Teams)
 
 Set `KARNA_SHARED_WORKSPACE=true` (env on `api` + `agent`) to make Karna a single shared team workspace. Every signed-in user can see and edit every task, schedule, and repo — regardless of `user_id`. Auth is still required at login; pair with `SIGNUP_DISABLED=true` so only invited users can join.
@@ -560,6 +601,7 @@ cache:schedules:list:{user_id}          # GET /api/schedules
 cache:schedules:runs:{schedule_id}      # GET /api/schedules/{id}/runs
 cache:schedules:run_logs:{run_id}       # GET /api/schedules/{id}/runs/{run_id}/logs
 cache:repos:list                        # GET /api/repos
+cache:agents:list                       # GET /api/agents
 cache:config                            # GET /api/config (also busted by repo writes)
 ```
 
