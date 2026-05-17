@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::cache;
-use crate::models::{AgentLog, AgentProfile, AgentTask, Policy, PrReview, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment};
+use crate::models::{AgentLog, AgentProfile, AgentTask, Policy, PrReview, PrReviewLog, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment};
 
 #[derive(Clone)]
 pub struct Database {
@@ -1276,6 +1276,55 @@ impl Database {
                LIMIT $2"#,
         )
         .bind(repo)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_pr_review(&self, id: Uuid) -> Result<Option<PrReview>> {
+        let row = sqlx::query_as::<_, PrReview>(
+            "SELECT * FROM pr_reviews WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn insert_pr_review_log(
+        &self,
+        review_id: Uuid,
+        phase: &str,
+        message: &str,
+        log_type: &str,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"INSERT INTO pr_review_logs (review_id, phase, message, log_type, metadata)
+               VALUES ($1, $2, $3, $4, $5)"#,
+        )
+        .bind(review_id)
+        .bind(phase)
+        .bind(message)
+        .bind(log_type)
+        .bind(metadata)
+        .execute(&self.pool)
+        .await?;
+        if let Some(r) = &self.redis {
+            cache::invalidate(r, &cache::pr_review_logs_key(review_id)).await;
+        }
+        Ok(())
+    }
+
+    pub async fn get_pr_review_logs(&self, review_id: Uuid, limit: i64) -> Result<Vec<PrReviewLog>> {
+        let rows = sqlx::query_as::<_, PrReviewLog>(
+            r#"SELECT * FROM (
+                 SELECT * FROM pr_review_logs WHERE review_id = $1
+                 ORDER BY created_at DESC LIMIT $2
+               ) sub ORDER BY created_at ASC"#,
+        )
+        .bind(review_id)
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;

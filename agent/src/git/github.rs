@@ -144,6 +144,37 @@ fn extract_pr_number(url: &str) -> Option<i32> {
     url.rsplit('/').next()?.parse().ok()
 }
 
+/// Outcome of `ensure_repo_webhook` — distinguishes "we registered it" from
+/// "GitHub already had one." `matched_url` is the URL GitHub actually has
+/// registered, which may differ cosmetically from `webhook_url` (trailing
+/// slash, case in scheme/host).
+#[derive(Debug)]
+pub struct WebhookEnsureResult {
+    pub matched_url: String,
+    pub created: bool,
+}
+
+/// Compare two URLs in a forgiving way: case-insensitive scheme + host,
+/// trailing-slash insensitive on the path. Anything else must match exactly.
+fn webhook_urls_equivalent(a: &str, b: &str) -> bool {
+    fn normalize(u: &str) -> String {
+        let trimmed = u.trim_end_matches('/');
+        // Split scheme://host[:port]/path — fold the prefix lowercase.
+        if let Some(idx) = trimmed.find("://") {
+            let (scheme, rest) = trimmed.split_at(idx + 3);
+            if let Some(slash) = rest.find('/') {
+                let (host, path) = rest.split_at(slash);
+                format!("{}{}{}", scheme.to_lowercase(), host.to_lowercase(), path)
+            } else {
+                format!("{}{}", scheme.to_lowercase(), rest.to_lowercase())
+            }
+        } else {
+            trimmed.to_lowercase()
+        }
+    }
+    normalize(a) == normalize(b)
+}
+
 /// Ensure a GitHub webhook is registered on the repo for agent PR events.
 /// Idempotent — checks existing hooks first and skips if one already points
 /// to the same URL. Requires the PAT to have `admin:repo_hook` scope.
@@ -151,7 +182,7 @@ pub async fn ensure_repo_webhook(
     repo: &str,
     webhook_url: &str,
     secret: Option<&str>,
-) -> Result<()> {
+) -> Result<WebhookEnsureResult> {
     let hook_target = format!("{webhook_url}/webhooks/github");
 
     // Check if a webhook already exists for this URL
@@ -163,9 +194,18 @@ pub async fn ensure_repo_webhook(
 
     if list_output.status.success() {
         let existing = String::from_utf8_lossy(&list_output.stdout);
-        if existing.lines().any(|line| line.trim() == hook_target) {
-            info!(repo, url = %hook_target, "Webhook already registered");
-            return Ok(());
+        for line in existing.lines() {
+            let url = line.trim();
+            if url.is_empty() {
+                continue;
+            }
+            if webhook_urls_equivalent(url, &hook_target) {
+                info!(repo, url, "Webhook already registered");
+                return Ok(WebhookEnsureResult {
+                    matched_url: url.to_string(),
+                    created: false,
+                });
+            }
         }
     }
 
@@ -206,5 +246,5 @@ pub async fn ensure_repo_webhook(
     }
 
     info!(repo, url = %hook_target, "Webhook registered");
-    Ok(())
+    Ok(WebhookEnsureResult { matched_url: hook_target, created: true })
 }

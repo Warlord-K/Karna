@@ -125,3 +125,11 @@ pub const REPOS_LIST_KEY: &str = "cache:repos:list";
 pub const CONFIG_KEY: &str = "cache:config";
 pub const AGENTS_LIST_KEY: &str = "cache:agents:list";
 pub const POLICIES_LIST_KEY: &str = "cache:policies:list";
+
+pub fn pr_reviews_for_repo_key(repo_id: Uuid) -> String {
+    format!("cache:reviews:repo:{repo_id}")
+}
+
+pub fn pr_review_logs_key(review_id: Uuid) -> String {
+    format!("cache:reviews:logs:{review_id}")
+}

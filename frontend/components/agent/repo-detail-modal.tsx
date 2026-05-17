@@ -1,10 +1,22 @@
 'use client';
 
-import { RepoProfile, REPO_STATUS_COLORS, REPO_STATUS_LABELS } from '@/lib/repos';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import toast from 'react-hot-toast';
+import {
+  RepoProfile,
+  REPO_STATUS_COLORS,
+  REPO_STATUS_LABELS,
+  PrReview,
+  fetchRepoReviews,
+  triggerWebhookRegister,
+} from '@/lib/repos';
 import { useUpdateRepo } from '@/hooks/use-repos';
 import { useAgents } from '@/hooks/use-tasks';
-import { X, ArrowsClockwise, Trash, GitBranch } from '@phosphor-icons/react';
+import { X, ArrowsClockwise, Trash, GitBranch, ArrowSquareOut } from '@phosphor-icons/react';
 import { MarkdownContent } from './markdown-content';
+import { ReviewLogModal } from './review-log-modal';
+import { formatDistanceToNow } from 'date-fns';
 
 interface RepoDetailModalProps {
   repo: RepoProfile | null;
@@ -16,6 +28,28 @@ interface RepoDetailModalProps {
 export function RepoDetailModal({ repo, onClose, onOnboard, onDelete }: RepoDetailModalProps) {
   const updateMutation = useUpdateRepo();
   const { data: agents = [] } = useAgents(!!repo);
+  const qc = useQueryClient();
+  const [openReview, setOpenReview] = useState<PrReview | null>(null);
+
+  const { data: reviews = [] } = useQuery<PrReview[]>({
+    queryKey: ['repos', repo?.id, 'reviews'],
+    queryFn: ({ signal }) => fetchRepoReviews(repo!.id, signal),
+    enabled: !!repo && !!repo.review_prs,
+    refetchInterval: (q) => {
+      const data = q.state.data as PrReview[] | undefined;
+      const hasRunning = data?.some((r) => r.status === 'running' || r.status === 'pending');
+      return hasRunning ? 3000 : 15000;
+    },
+  });
+
+  const rereginMutation = useMutation({
+    mutationFn: () => triggerWebhookRegister(repo!.id),
+    onSuccess: () => {
+      toast.success('Webhook re-registration queued');
+      qc.invalidateQueries({ queryKey: ['repos'] });
+    },
+    onError: () => toast.error('Failed to queue re-registration'),
+  });
 
   if (!repo) return null;
 
@@ -102,7 +136,13 @@ export function RepoDetailModal({ repo, onClose, onOnboard, onDelete }: RepoDeta
               </button>
             </div>
 
-            {repo.sync_issues && <WebhookStatusRow repo={repo} />}
+            {repo.sync_issues && (
+              <WebhookStatusRow
+                repo={repo}
+                onReregister={() => rereginMutation.mutate()}
+                isReregistering={rereginMutation.isPending}
+              />
+            )}
 
             <div className="bg-gray-2 rounded-lg border border-gray-3 px-3 py-2.5 flex items-center justify-between">
               <div>
@@ -199,6 +239,24 @@ export function RepoDetailModal({ repo, onClose, onOnboard, onDelete }: RepoDeta
             </div>
           )}
 
+          {/* PR Reviews */}
+          {repo.review_prs && (
+            <div className="space-y-2">
+              <h3 className="text-[13px] font-medium text-gray-10">PR reviews</h3>
+              {reviews.length === 0 ? (
+                <div className="bg-gray-2 rounded-lg border border-gray-3 px-3 py-3 text-[12px] text-gray-7">
+                  No reviews yet. Will appear here as soon as a teammate opens a PR.
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {reviews.slice(0, 10).map((r) => (
+                    <ReviewRow key={r.id} review={r} onClick={() => setOpenReview(r)} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Error */}
           {repo.status === 'failed' && repo.error_message && (
             <div className="space-y-2">
@@ -210,7 +268,62 @@ export function RepoDetailModal({ repo, onClose, onOnboard, onDelete }: RepoDeta
           )}
         </div>
       </div>
+
+      {openReview && (
+        <ReviewLogModal
+          repoId={repo.id}
+          review={openReview}
+          onClose={() => setOpenReview(null)}
+        />
+      )}
     </div>
+  );
+}
+
+function ReviewRow({ review, onClick }: { review: PrReview; onClick: () => void }) {
+  const statusTone: Record<string, string> = {
+    running: 'bg-amber-500/15 text-amber-400 border-amber-500/30 animate-pulse',
+    pending: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+    completed: 'bg-green-500/15 text-green-400 border-green-500/30',
+    failed: 'bg-red-500/15 text-red-400 border-red-500/30',
+    skipped: 'bg-gray-3 text-gray-8 border-gray-5',
+  };
+  const tone = statusTone[review.status] || statusTone.pending;
+  return (
+    <button
+      onClick={onClick}
+      className="w-full text-left bg-gray-2 border border-gray-3 rounded-lg px-3 py-2 hover:bg-gray-3 transition-colors"
+    >
+      <div className="flex items-center gap-2">
+        <span className="text-[12px] text-gray-9 font-mono">#{review.pr_number}</span>
+        <span className={`inline-flex items-center px-1.5 h-4 rounded text-[10px] border ${tone}`}>
+          {review.status}
+        </span>
+        {review.author && <span className="text-[11px] text-gray-7">@{review.author}</span>}
+        <span className="text-[11px] text-gray-7 font-mono ml-2">{review.head_sha.slice(0, 7)}</span>
+        {review.cost_usd > 0 && (
+          <span className="text-[11px] text-gray-7 font-mono">${review.cost_usd.toFixed(3)}</span>
+        )}
+        <span className="text-[11px] text-gray-7 ml-auto">
+          {review.created_at ? formatDistanceToNow(new Date(review.created_at), { addSuffix: true }) : ''}
+        </span>
+        {review.pr_url && (
+          <a
+            href={review.pr_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="text-gray-7 hover:text-gray-11 flex-shrink-0"
+            title="Open PR on GitHub"
+          >
+            <ArrowSquareOut size={12} weight="bold" />
+          </a>
+        )}
+      </div>
+      {review.error_message && (
+        <div className="text-[11px] text-red-300 mt-1 line-clamp-2 font-mono">{review.error_message}</div>
+      )}
+    </button>
   );
 }
 
@@ -235,7 +348,15 @@ function CommandRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function WebhookStatusRow({ repo }: { repo: RepoProfile }) {
+function WebhookStatusRow({
+  repo,
+  onReregister,
+  isReregistering,
+}: {
+  repo: RepoProfile;
+  onReregister?: () => void;
+  isReregistering?: boolean;
+}) {
   const status = repo.webhook_status;
   const toneByStatus: Record<string, { dot: string; text: string; label: string; hint: string }> = {
     registered: {
@@ -270,6 +391,17 @@ function WebhookStatusRow({ repo }: { repo: RepoProfile }) {
       <div className="flex items-center gap-2">
         <span className={`w-2 h-2 rounded-full flex-shrink-0 ${tone.dot}`} />
         <span className={`text-[13px] ${tone.text}`}>{tone.label}</span>
+        {onReregister && status !== 'unsupported' && (
+          <button
+            onClick={onReregister}
+            disabled={isReregistering}
+            className="ml-auto h-6 px-2 text-[11px] text-gray-9 hover:text-gray-12 hover:bg-gray-3 rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+            title="Force the agent to retry webhook registration on its next poll"
+          >
+            <ArrowsClockwise size={11} weight="bold" className={isReregistering ? 'animate-spin' : ''} />
+            Re-register
+          </button>
+        )}
       </div>
       <div className="text-[11px] text-gray-7 mt-0.5 pl-4">{tone.hint}</div>
     </div>

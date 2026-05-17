@@ -6,16 +6,22 @@
 //! `repo_profiles.review_prs`. Uses the user's existing Claude/Codex
 //! subscription — no extra API spend.
 //!
-//! The reviewer runs the CLI in read-only mode (no Edit/Write tools), with a
-//! strict review-mode system prompt that limits comments to substantive
-//! correctness / security / bug issues. It posts the review via
-//! `gh pr review <pr> --comment --body "..."` directly from the CLI's Bash
-//! tool — no parsing of structured output needed.
+//! Lifecycle:
+//!   1. Dedupe via UNIQUE (repo, head_sha) on `pr_reviews`.
+//!   2. Post a "review in progress" comment so the author sees something is
+//!      happening immediately (and rules out "did the webhook even fire?").
+//!   3. Stream CLI tool calls + assistant text into `pr_review_logs` so the
+//!      UI can show live progress.
+//!   4. CLI posts the final review via `gh pr review --comment --body "..."`.
+//!   5. Edit (or delete) the progress comment to reflect outcome.
 
 use anyhow::{Context, Result};
+use serde_json::json;
+use tokio::process::Command;
 use tracing::{info, warn};
+use uuid::Uuid;
 
-use crate::cli::{self, CliOptions};
+use crate::cli::{self, CliOptions, EventSender, StreamEvent};
 use crate::config::Config;
 use crate::db::Database;
 use crate::git::workspace;
@@ -65,7 +71,6 @@ pub struct ReviewRequest<'a> {
 /// Returns Ok(()) on every outcome (success, skip, even failure) — we record
 /// the result on the `pr_reviews` row, so the caller doesn't need to act on it.
 pub async fn maybe_review_pr(config: Config, db: Database, req: ReviewRequest<'_>) -> Result<()> {
-    // 1. Check per-repo opt-in
     let profile = db
         .get_repo_profile(req.repo)
         .await
@@ -79,7 +84,6 @@ pub async fn maybe_review_pr(config: Config, db: Database, req: ReviewRequest<'_
         return Ok(());
     }
 
-    // 2. Resolve which agent profile to use (repo override → first default profile → config default)
     let agent_profile = if let Some(id) = profile.review_agent_id {
         db.get_agent_profile(id).await.ok().flatten()
     } else {
@@ -95,8 +99,8 @@ pub async fn maybe_review_pr(config: Config, db: Database, req: ReviewRequest<'_
         }
     };
 
-    // 3. Atomic dedupe via UNIQUE (repo, head_sha). If two webhook firings
-    //    race, only one wins and the other gets None.
+    // Race-safe insert. If two webhook firings collide on the same head_sha,
+    // only one wins; the other returns None and exits cleanly.
     let review_row = db
         .start_pr_review(
             req.repo,
@@ -119,12 +123,80 @@ pub async fn maybe_review_pr(config: Config, db: Database, req: ReviewRequest<'_
         return Ok(());
     };
 
-    let outcome = run_review(&config, &cli_name, &model, addendum.as_deref(), &req).await;
+    // Post the "in progress" comment so the author sees instant feedback.
+    // Best-effort — a failure here doesn't stop the review.
+    let agent_label = agent_profile
+        .as_ref()
+        .map(|p| format!("{} {}", p.avatar_emoji, p.name))
+        .unwrap_or_else(|| format!("{cli_name} ({model})"));
+    let progress_body = format!(
+        "🤖 **Karna review in progress**\n\n\
+         {agent_label} is reviewing this PR. The final review will appear as a separate comment below.\n\n\
+         <sub>This comment will be updated when the review finishes. Sourced from <code>{head_sha}</code>.</sub>",
+        head_sha = &req.head_sha[..req.head_sha.len().min(8)],
+    );
+    let progress_comment_id = match post_pr_comment(req.repo, req.pr_number, &progress_body).await {
+        Ok(id) => {
+            let _ = db.insert_pr_review_log(
+                review.id,
+                "review",
+                &format!("Posted progress comment #{id} on {}#{}", req.repo, req.pr_number),
+                "info",
+                None,
+            ).await;
+            Some(id)
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to post review-in-progress comment");
+            let _ = db.insert_pr_review_log(
+                review.id,
+                "review",
+                &format!("Failed to post progress comment: {e}"),
+                "warning",
+                None,
+            ).await;
+            None
+        }
+    };
+
+    let _ = db.insert_pr_review_log(
+        review.id,
+        "review",
+        &format!("Invoking {cli_name} ({model}) for read-only review"),
+        "command",
+        None,
+    ).await;
+
+    let outcome = run_review(&config, &db, review.id, &cli_name, &model, addendum.as_deref(), &req).await;
 
     let (status, cost_usd, error) = match &outcome {
         Ok(cost) => ("completed", *cost, None),
         Err(e) => ("failed", 0.0, Some(format!("{e:#}"))),
     };
+
+    // Update or remove the progress comment to reflect outcome.
+    if let Some(comment_id) = progress_comment_id {
+        let final_body = match &outcome {
+            Ok(_) => format!(
+                "🤖 **Karna review complete** — see the review below.\n\n\
+                 <sub>Reviewed by {agent_label} on commit <code>{head_sha}</code>.</sub>",
+                head_sha = &req.head_sha[..req.head_sha.len().min(8)],
+            ),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                let truncated: String = msg.chars().take(500).collect();
+                format!(
+                    "🤖 **Karna review failed**\n\n\
+                     ```\n{truncated}\n```\n\n\
+                     <sub>Reviewer: {agent_label}. Commit <code>{head_sha}</code>.</sub>",
+                    head_sha = &req.head_sha[..req.head_sha.len().min(8)],
+                )
+            }
+        };
+        if let Err(e) = update_pr_comment(req.repo, comment_id, &final_body).await {
+            warn!(error = %e, comment_id, "Failed to update progress comment");
+        }
+    }
 
     if let Err(e) = db
         .complete_pr_review(review.id, status, 0, cost_usd, error.as_deref())
@@ -133,20 +205,26 @@ pub async fn maybe_review_pr(config: Config, db: Database, req: ReviewRequest<'_
         warn!(error = %e, "Failed to record pr_review completion");
     }
 
+    let _ = db.insert_pr_review_log(
+        review.id,
+        "review",
+        &format!("Review finished with status={status}, cost_usd={cost_usd:.4}"),
+        if status == "completed" { "info" } else { "error" },
+        None,
+    ).await;
+
     outcome.map(|_| ())
 }
 
-/// Runs the CLI review and returns the cost spent. The caller records the
-/// outcome on the `pr_reviews` row.
 async fn run_review(
     config: &Config,
+    db: &Database,
+    review_id: Uuid,
     cli_name: &str,
     model: &str,
     addendum: Option<&str>,
     req: &ReviewRequest<'_>,
 ) -> Result<f64> {
-    // Ensure the repo is cloned and fetched. Working dir is the base-branch
-    // checkout — agent uses `gh pr diff` / `gh pr view` for the PR contents.
     let clone_path = workspace::ensure_cloned(&config.repos_dir, req.repo, &config.github_token)
         .await
         .context("Failed to ensure repo is cloned for review")?;
@@ -185,20 +263,21 @@ async fn run_review(
         "Starting PR review"
     );
 
+    let event_tx = spawn_review_log_consumer(db.clone(), review_id);
+
     let result = cli::run(
         cli_name,
         CliOptions {
             working_dir: &clone_path,
             prompt: &prompt,
             system_prompt: Some(&system_prompt),
-            // Read-only review — no Write/Edit. Bash needed for `gh`.
             allowed_tools: Some("Read,Glob,Grep,Bash"),
             max_turns: 30,
             model,
             mcp_config_json: None,
             session_id: None,
             resume: false,
-            event_tx: None,
+            event_tx: Some(event_tx),
             image_paths: Vec::new(),
         },
     )
@@ -212,4 +291,111 @@ async fn run_review(
     );
 
     Ok(result.cost_usd)
+}
+
+/// Stream CLI events into the per-review log table. Mirrors
+/// `agent::spawn_log_consumer` but persists to `pr_review_logs`.
+fn spawn_review_log_consumer(db: Database, review_id: Uuid) -> EventSender {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            let (message, log_type) = match event {
+                StreamEvent::ToolUse { tool, input_summary } => {
+                    let msg = if input_summary.is_empty() {
+                        tool
+                    } else {
+                        format!("{tool}: {input_summary}")
+                    };
+                    (msg, "tool")
+                }
+                StreamEvent::AssistantText(text) => {
+                    let trimmed = text.trim();
+                    if trimmed.len() < 20 {
+                        continue;
+                    }
+                    let truncated: String = trimmed.chars().take(300).collect();
+                    (truncated, "output")
+                }
+                StreamEvent::Error(e) => (format!("Error: {e}"), "error"),
+            };
+            let _ = db
+                .insert_pr_review_log(review_id, "review", &message, log_type, None)
+                .await;
+        }
+    });
+    tx
+}
+
+/// Post a comment on a PR via `gh api`. Returns the new comment's numeric ID.
+async fn post_pr_comment(repo: &str, pr_number: i32, body: &str) -> Result<i64> {
+    let output = Command::new("gh")
+        .args([
+            "api",
+            &format!("repos/{repo}/issues/{pr_number}/comments"),
+            "--method",
+            "POST",
+            "--input",
+            "-",
+            "--jq",
+            ".id",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("Failed to spawn gh api")?;
+
+    // Write the JSON body on stdin to avoid shell-quoting issues with long messages.
+    let payload = json!({ "body": body }).to_string();
+    use tokio::io::AsyncWriteExt;
+    {
+        let mut child = output;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(payload.as_bytes()).await.ok();
+            stdin.shutdown().await.ok();
+        }
+        let done = child.wait_with_output().await.context("gh api wait failed")?;
+        if !done.status.success() {
+            let stderr = String::from_utf8_lossy(&done.stderr);
+            anyhow::bail!("gh api comment POST failed: {stderr}");
+        }
+        let id_str = String::from_utf8_lossy(&done.stdout);
+        let id: i64 = id_str
+            .trim()
+            .parse()
+            .with_context(|| format!("Comment ID parse failed: {id_str:?}"))?;
+        Ok(id)
+    }
+}
+
+/// Edit an existing PR comment by ID via `gh api`.
+async fn update_pr_comment(repo: &str, comment_id: i64, body: &str) -> Result<()> {
+    let mut child = Command::new("gh")
+        .args([
+            "api",
+            &format!("repos/{repo}/issues/comments/{comment_id}"),
+            "--method",
+            "PATCH",
+            "--input",
+            "-",
+            "--silent",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("Failed to spawn gh api")?;
+
+    let payload = json!({ "body": body }).to_string();
+    use tokio::io::AsyncWriteExt;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(payload.as_bytes()).await.ok();
+        stdin.shutdown().await.ok();
+    }
+    let done = child.wait_with_output().await.context("gh api wait failed")?;
+    if !done.status.success() {
+        let stderr = String::from_utf8_lossy(&done.stderr);
+        anyhow::bail!("gh api comment PATCH failed: {stderr}");
+    }
+    Ok(())
 }

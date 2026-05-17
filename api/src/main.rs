@@ -96,6 +96,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/repos", get(routes::repos::list).post(routes::repos::add))
         .route("/repos/{id}", patch(routes::repos::update).delete(routes::repos::delete))
         .route("/repos/{id}/onboard", post(routes::repos::trigger_onboard))
+        .route("/repos/{id}/webhook", post(routes::repos::trigger_webhook_register))
+        .route("/repos/{id}/reviews", get(routes::repos::list_reviews))
+        .route(
+            "/repos/{id}/reviews/{review_id}/logs",
+            get(routes::repos::review_logs),
+        )
         // Users (for assignee dropdown)
         .route("/users", get(routes::users::list))
         // Agent profiles (pseudo-users)

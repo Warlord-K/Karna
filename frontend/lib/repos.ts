@@ -53,6 +53,53 @@ export async function triggerOnboard(id: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to trigger onboarding');
 }
 
+export async function triggerWebhookRegister(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/${id}/webhook`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to re-register webhook');
+}
+
+// --- PR review types + clients ---
+
+export type PrReviewStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+
+export interface PrReview {
+  id: string;
+  repo: string;
+  pr_number: number;
+  pr_url: string | null;
+  head_sha: string;
+  author: string | null;
+  reviewer_agent_id: string | null;
+  status: PrReviewStatus;
+  comments_posted: number;
+  cost_usd: number;
+  error_message: string | null;
+  created_at: string | null;
+  completed_at: string | null;
+}
+
+export interface PrReviewLog {
+  id: string;
+  review_id: string;
+  phase: string;
+  message: string;
+  log_type: 'info' | 'error' | 'warning' | 'command' | 'output' | 'tool' | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string | null;
+}
+
+export async function fetchRepoReviews(repoId: string, signal?: AbortSignal): Promise<PrReview[]> {
+  const res = await fetch(`${API_BASE}/${repoId}/reviews`, { signal });
+  if (!res.ok) throw new Error('Failed to fetch reviews');
+  return res.json();
+}
+
+export async function fetchReviewLogs(repoId: string, reviewId: string, signal?: AbortSignal): Promise<PrReviewLog[]> {
+  const res = await fetch(`${API_BASE}/${repoId}/reviews/${reviewId}/logs`, { signal });
+  if (!res.ok) throw new Error('Failed to fetch review logs');
+  return res.json();
+}
+
 export async function updateRepo(
   id: string,
   data: {

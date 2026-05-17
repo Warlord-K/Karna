@@ -100,25 +100,26 @@ async fn onboard_repo(config: &Config, db: &Database, profile: &RepoProfile) -> 
 
     // Auto-register GitHub webhook (idempotent) and persist the outcome
     // so the UI can show whether issue sync actually works for this repo.
-    register_webhook(config, db, profile).await;
+    let _ = register_webhook(config, db, profile).await;
 
     Ok(())
 }
 
 /// Attempt webhook registration and record the result on the profile.
 /// Splits out so the poll-loop reconciler can call it independently of onboarding.
-async fn register_webhook(config: &Config, db: &Database, profile: &RepoProfile) {
+/// Returns the matched URL on success so callers (e.g. the manual re-register
+/// endpoint) can surface what GitHub actually has registered.
+pub async fn register_webhook(
+    config: &Config,
+    db: &Database,
+    profile: &RepoProfile,
+) -> Result<String, String> {
     let Some(webhook_url) = &config.webhook_url else {
-        // No public URL configured — surface this in the UI rather than silently skipping.
+        let msg = "Set AGENT_WEBHOOK_URL or TUNNEL_AGENT_HOSTNAME to enable GitHub webhooks";
         let _ = db
-            .set_repo_webhook_status(
-                profile.id,
-                "unsupported",
-                None,
-                Some("Set AGENT_WEBHOOK_URL or TUNNEL_AGENT_HOSTNAME to enable GitHub webhooks"),
-            )
+            .set_repo_webhook_status(profile.id, "unsupported", None, Some(msg))
             .await;
-        return;
+        return Err(msg.to_string());
     };
 
     match github::ensure_repo_webhook(
@@ -128,23 +129,28 @@ async fn register_webhook(config: &Config, db: &Database, profile: &RepoProfile)
     )
     .await
     {
-        Ok(()) => {
-            info!(repo = %profile.repo, "Webhook configured");
+        Ok(outcome) => {
+            info!(repo = %profile.repo, matched = %outcome.matched_url, created = outcome.created, "Webhook configured");
+            // Persist the URL GitHub actually has registered, not our env's
+            // value — so the UI can show mismatches.
             let _ = db
-                .set_repo_webhook_status(profile.id, "registered", Some(webhook_url), None)
+                .set_repo_webhook_status(profile.id, "registered", Some(&outcome.matched_url), None)
                 .await;
+            Ok(outcome.matched_url)
         }
         Err(e) => {
             warn!(repo = %profile.repo, error = %e,
                 "Failed to register webhook (missing admin:repo_hook scope?)");
+            let err_msg = format!("{e:#}");
             let _ = db
                 .set_repo_webhook_status(
                     profile.id,
                     "failed",
                     Some(webhook_url),
-                    Some(&format!("{e:#}")),
+                    Some(&err_msg),
                 )
                 .await;
+            Err(err_msg)
         }
     }
 }
@@ -165,7 +171,7 @@ pub async fn reconcile_webhooks(config: &Config, db: &Database) -> Result<()> {
         {
             continue;
         }
-        register_webhook(config, db, &profile).await;
+        let _ = register_webhook(config, db, &profile).await;
     }
     Ok(())
 }

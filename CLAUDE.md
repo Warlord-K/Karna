@@ -87,7 +87,8 @@ karna/
 │   ├── 015_webhook_status.sql   # Per-repo webhook registration outcome (status/url/error)
 │   ├── 016_agent_profiles.sql   # Named agent identities + agent_tasks.assigned_agent_id
 │   ├── 017_pr_reviews.sql       # pr_reviews + repo_profiles.review_prs / .review_agent_id
-│   └── 018_policies.sql         # Policies (advisory plan-review guardrails) + agent_tasks.policy_matches
+│   ├── 018_policies.sql         # Policies (advisory plan-review guardrails) + agent_tasks.policy_matches
+│   └── 019_pr_review_logs.sql   # Per-review activity log for live progress streaming
 ├── Cargo.toml                   # Workspace root (members: agent, api, shared)
 ├── shared/
 │   ├── Cargo.toml
@@ -205,6 +206,7 @@ karna/
   - `review_prs` (BOOLEAN) — when TRUE, the agent auto-reviews human-opened PRs
   - `review_agent_id` (UUID, nullable) — FK to `agent_profiles.id`; NULL = use config defaults
 - `pr_reviews` — One row per (repo, head_sha) PR review attempt; UNIQUE constraint dedupes concurrent webhook firings; tracks status, reviewer agent, comments_posted, cost_usd
+- `pr_review_logs` — Append-only per-review activity log streamed live from the CLI (tool calls, assistant text, errors). Powers the live progress modal
 
 ## Task State Machine
 
@@ -291,6 +293,9 @@ All data routes are served by the Rust API (`api/`). The frontend proxies `/api/
 | POST | /api/repos | Add new repo (triggers onboarding) |
 | DELETE | /api/repos/{id} | Delete repo profile |
 | POST | /api/repos/{id}/onboard | Trigger re-onboarding for a repo |
+| POST | /api/repos/{id}/webhook | Force webhook re-registration on next agent poll |
+| GET | /api/repos/{id}/reviews | List recent PR reviews for this repo (50, Redis-cached) |
+| GET | /api/repos/{id}/reviews/{review_id}/logs | Live activity log for one review (200, short TTL) |
 | GET | /api/users | List users (id, name, email) for assignee dropdown |
 | GET | /api/agents | List agent profiles (Redis-cached) |
 | POST | /api/agents | Create custom agent profile |
@@ -671,17 +676,32 @@ When a teammate opens a PR (or force-pushes new commits) on a repo with `review_
 | `cost_usd` | Theoretical quota burn from CLI output (subscription doesn't charge this — see "Agent Profiles" note on cost tracking) |
 | `comments_posted` | Reserved for future structured-comment posting; currently 0 |
 
+**Progress comment** — when a review starts, the agent posts a "🤖 Karna review in progress" comment on the PR (via `gh api .../issues/{n}/comments`) so the author sees instant feedback that the webhook fired and the agent picked it up. When the review finishes:
+- Success: the comment is edited to "🤖 Karna review complete — see the review below."
+- Failure: edited to "🤖 Karna review failed" with a truncated error message in a code block.
+
+Comment ID is held in-memory during the run (no DB column); if the agent crashes mid-review the comment stays as "in progress" until the next force-push triggers a new review.
+
+**Live progress streaming** — CLI tool calls and assistant text are streamed into `pr_review_logs` via `spawn_review_log_consumer` (mirrors the task-side `spawn_log_consumer`). The UI polls `GET /api/repos/{id}/reviews/{review_id}/logs` every 2 seconds while the review is `running` / `pending`, frozen on terminal status. A short Redis TTL (5s) keeps the cache from masking new entries while still cutting Postgres traffic.
+
+**Bot-comment filter** — applied at the **top** of the GitHub webhook handler, before any branch / agent-vs-human routing. Any `issue_comment`, `pull_request_review_comment`, or `pull_request_review` event whose user's `type == "Bot"` is dropped immediately. This covers Vercel preview deploys, GitHub Actions status updates, dependabot, renovate, and Karna's own progress-comment edits on both agent PRs and human PRs. Bot-authored PRs (e.g. renovate dependency updates) still get auto-reviewed normally — the filter is on commenters/reviewers, not PR authors.
+
+**Manual re-registration** — `POST /api/repos/{id}/webhook` flips `webhook_status` to `not_registered`; the reconciler picks it up on its next poll cycle (typically within seconds). The repo card surfaces a "Re-register" button on the webhook status row when sync is enabled but the hook isn't live. The webhook URL match is now case-insensitive on scheme + host and trailing-slash insensitive on path — manually-configured hooks that differed only cosmetically used to be missed.
+
 **Frontend:**
-- Repo detail modal ([repo-detail-modal.tsx](frontend/components/agent/repo-detail-modal.tsx)) has an "Auto-review PRs" toggle and a "Review agent" dropdown that appears when the toggle is on. Amber callout when the webhook isn't `registered` — reviews can't fire without a live webhook.
+- Repo detail modal ([repo-detail-modal.tsx](frontend/components/agent/repo-detail-modal.tsx)) has the "Auto-review PRs" toggle, the "Review agent" dropdown, the webhook re-register button, and a **PR reviews** section listing the last 10 reviews with status, author, head SHA, cost, and a link to the PR. Auto-refresh every 3s while any review is `running`, every 15s otherwise.
+- [review-log-modal.tsx](frontend/components/agent/review-log-modal.tsx) — click a review row to see live logs (timestamps, tool calls, assistant text, errors). Polls every 2s while live.
 - Repo card ([repo-card.tsx](frontend/components/agent/repo-card.tsx)) shows a purple `reviews` badge when enabled (amber with `no hook` when the webhook isn't live).
 
 **Cost model — important:** `cost_usd` on `pr_reviews` is the same theoretical-API-equivalent figure that the Claude CLI emits (`total_cost_usd` in the stream JSON). With a subscription, you aren't billed it — but it's a useful proxy for quota burn. To minimize quota impact, set `review_agent_id` to a cheap-model profile (haiku, gpt-5.4-mini) per repo.
 
 **Key files:**
-- [agent/src/reviewer.rs](agent/src/reviewer.rs) — Review orchestration + system prompt
-- [agent/src/api/mod.rs](agent/src/api/mod.rs) — `handle_pr_review_trigger` webhook arm
-- [shared/src/db.rs](shared/src/db.rs) — `start_pr_review` (race-safe insert), `complete_pr_review`, `update_repo_review_config`
-- [api/src/routes/repos.rs](api/src/routes/repos.rs) — PATCH accepts `review_prs` + `review_agent_id` (null clears)
+- [agent/src/reviewer.rs](agent/src/reviewer.rs) — Review orchestration, system prompt, progress comment + log streaming
+- [agent/src/api/mod.rs](agent/src/api/mod.rs) — `handle_pr_review_trigger` webhook arm + bot-comment filter + `trigger_webhook_register` debug endpoint
+- [agent/src/git/github.rs](agent/src/git/github.rs) — `webhook_urls_equivalent` (forgiving match), `WebhookEnsureResult`
+- [agent/src/onboarding.rs](agent/src/onboarding.rs) — `register_webhook` returns `Result<String, String>` (matched URL or error)
+- [shared/src/db.rs](shared/src/db.rs) — `start_pr_review` (race-safe insert), `complete_pr_review`, `insert_pr_review_log`, `get_pr_review_logs`, `update_repo_review_config`
+- [api/src/routes/repos.rs](api/src/routes/repos.rs) — `list_reviews`, `review_logs`, `trigger_webhook_register`
 
 ## Redis Queue Protocol
 
@@ -709,6 +729,8 @@ cache:schedules:run_logs:{run_id}       # GET /api/schedules/{id}/runs/{run_id}/
 cache:repos:list                        # GET /api/repos
 cache:agents:list                       # GET /api/agents
 cache:policies:list                     # GET /api/policies
+cache:reviews:repo:{repo_id}            # GET /api/repos/{id}/reviews   (60s TTL)
+cache:reviews:logs:{review_id}          # GET /api/repos/{id}/reviews/{review_id}/logs (5s TTL — live)
 cache:config                            # GET /api/config (also busted by repo writes)
 ```
 

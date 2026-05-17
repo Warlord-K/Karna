@@ -119,6 +119,69 @@ pub async fn delete(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// Reset `webhook_status` so the agent's reconciler picks up this repo on
+/// its next poll cycle (typically within seconds). The frontend polls the
+/// repos list and sees the status change.
+pub async fn trigger_webhook_register(
+    State(state): State<AppState>,
+    Extension(_user): Extension<UserId>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, StatusCode> {
+    state
+        .db
+        .set_repo_webhook_status(id, "not_registered", None, None)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(json!({ "ok": true, "message": "Webhook re-registration queued" })))
+}
+
+pub async fn list_reviews(
+    State(state): State<AppState>,
+    Extension(_user): Extension<UserId>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<karna_shared::models::PrReview>>, StatusCode> {
+    let profiles = state
+        .db
+        .get_all_repo_profiles()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let repo = profiles
+        .into_iter()
+        .find(|p| p.id == id)
+        .ok_or(StatusCode::NOT_FOUND)?
+        .repo;
+
+    let db = state.db.clone();
+    let cache_key = cache::pr_reviews_for_repo_key(id);
+    let reviews = cache::get_or_set(&state.redis, &cache_key, 60, move || async move {
+        db.list_pr_reviews_for_repo(&repo, 50).await
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(reviews))
+}
+
+pub async fn review_logs(
+    State(state): State<AppState>,
+    Extension(_user): Extension<UserId>,
+    Path((_repo_id, review_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Vec<karna_shared::models::PrReviewLog>>, StatusCode> {
+    // Ownership scope: the review must exist. We don't tie it back to the
+    // repo_id beyond URL routing — the review row carries the repo string.
+    if state.db.get_pr_review(review_id).await.ok().flatten().is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let db = state.db.clone();
+    let cache_key = cache::pr_review_logs_key(review_id);
+    let logs = cache::get_or_set(&state.redis, &cache_key, 5, move || async move {
+        db.get_pr_review_logs(review_id, 200).await
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(logs))
+}
+
 pub async fn trigger_onboard(
     State(state): State<AppState>,
     Extension(_user): Extension<UserId>,

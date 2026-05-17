@@ -68,6 +68,7 @@ pub async fn serve(config: Config, db: Database, shutdown: tokio::sync::watch::R
         .route("/repos", post(add_repo))
         .route("/repos/{id}", delete(delete_repo))
         .route("/repos/{id}/onboard", post(trigger_onboard))
+        .route("/repos/{id}/webhook", post(trigger_webhook_register))
         .route("/webhooks/github", post(github_webhook))
         .with_state(state);
 
@@ -156,6 +157,49 @@ async fn delete_repo(
     }
 }
 
+/// Force a webhook re-registration for a single repo. Returns the matched
+/// URL on success or the error string on failure so the UI can surface it
+/// without making the user dig through agent container logs.
+async fn trigger_webhook_register(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let profiles = match state.db.get_all_repo_profiles().await {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{e}") })),
+            );
+        }
+    };
+    let Some(profile) = profiles.into_iter().find(|p| p.id == id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "repo not found" })),
+        );
+    };
+
+    match crate::onboarding::register_webhook(&state.config, &state.db, &profile).await {
+        Ok(matched_url) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "status": "registered",
+                "matched_url": matched_url,
+            })),
+        ),
+        Err(err) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": false,
+                "status": if state.config.webhook_url.is_some() { "failed" } else { "unsupported" },
+                "error": err,
+            })),
+        ),
+    }
+}
+
 async fn trigger_onboard(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -209,6 +253,28 @@ async fn github_webhook(
         .unwrap_or("");
     if event == "issues" && action == "opened" {
         return handle_issue_opened(&state, &payload).await;
+    }
+
+    // Top-level bot filter — applies to every PR regardless of ownership.
+    // Vercel preview deploys, GitHub Actions status updates, dependabot,
+    // renovate, and Karna's own progress-comment edits all show up as
+    // `user.type == "Bot"` and would otherwise add noise to whichever path
+    // we'd route the event to next.
+    if event == "issue_comment" || event == "pull_request_review_comment" {
+        let kind = payload.pointer("/comment/user/type").and_then(|v| v.as_str()).unwrap_or("");
+        if kind == "Bot" {
+            let login = payload.pointer("/comment/user/login").and_then(|v| v.as_str()).unwrap_or("");
+            info!(event, bot = login, "Webhook: ignoring bot comment");
+            return StatusCode::OK;
+        }
+    }
+    if event == "pull_request_review" {
+        let kind = payload.pointer("/review/user/type").and_then(|v| v.as_str()).unwrap_or("");
+        if kind == "Bot" {
+            let login = payload.pointer("/review/user/login").and_then(|v| v.as_str()).unwrap_or("");
+            info!(event, bot = login, "Webhook: ignoring bot review");
+            return StatusCode::OK;
+        }
     }
 
     let branch = payload
@@ -309,7 +375,9 @@ async fn github_webhook(
         }
     }
 
-    // Issue comment on a tracked PR → append to feedback
+    // Issue comment on a tracked PR → append to feedback.
+    // Bot comments are filtered at the top of this handler — by the time we
+    // get here the commenter is a human.
     if action == "created" && payload.get("comment").is_some() && payload.get("issue").is_some() {
         let comment_body = payload
             .pointer("/comment/body")

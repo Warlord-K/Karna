@@ -337,6 +337,17 @@ pub struct RepoProfile {
 // --- PR review records ---
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct PrReviewLog {
+    pub id: Uuid,
+    pub review_id: Uuid,
+    pub phase: String,
+    pub message: String,
+    pub log_type: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct PrReview {
     pub id: Uuid,
     pub repo: String,
