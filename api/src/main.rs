@@ -102,10 +102,21 @@ async fn main() -> anyhow::Result<()> {
         .route("/agents", get(routes::agents::list).post(routes::agents::create))
         .route(
             "/agents/{id}",
-            patch(routes::agents::update).delete(routes::agents::delete),
+            get(routes::agents::get)
+                .patch(routes::agents::update)
+                .delete(routes::agents::delete),
         )
+        .route("/agents/{id}/stats", get(routes::agents::stats))
+        .route("/agents/{id}/tasks", get(routes::agents::tasks))
+        .route("/agents/{id}/reviews", get(routes::agents::reviews))
         // Unified assignee picker (humans + agents)
         .route("/assignables", get(routes::agents::assignables))
+        // Policies (advisory guardrails on plan_review)
+        .route("/policies", get(routes::policies::list).post(routes::policies::create))
+        .route(
+            "/policies/{id}",
+            patch(routes::policies::update).delete(routes::policies::delete),
+        )
         // Config
         .route("/config", get(routes::config::get))
         // Auth middleware on all routes

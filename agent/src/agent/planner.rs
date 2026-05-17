@@ -201,6 +201,9 @@ Rules for subtasks:
         if current_feedback == original_feedback {
             db.clear_feedback(task.id).await?;
         }
+        // Run policy scan against the fresh plan. Advisory; failures are
+        // logged and don't break planning.
+        crate::policies::scan_and_persist(db, &current).await;
         let _ = crate::notifications::send_plan_ready(config, &current).await;
     }
 

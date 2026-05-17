@@ -355,6 +355,29 @@ export function TaskDetailModal({ task, onClose, onUpdate, onDelete }: TaskDetai
             <div className="space-y-5">
               {task.plan_content ? (
                 <>
+                  {task.policy_matches && task.policy_matches.length > 0 && (
+                    <div className="space-y-2">
+                      {task.policy_matches.map((m) => {
+                        const tone = m.severity === 'block'
+                          ? 'bg-red-500/10 border-red-500/30'
+                          : 'bg-amber-500/10 border-amber-500/30';
+                        const accent = m.severity === 'block' ? 'text-red-300' : 'text-amber-300';
+                        return (
+                          <div key={m.policy_id} className={`rounded-lg border px-3 py-2.5 ${tone}`}>
+                            <div className="flex items-center gap-2 mb-1">
+                              <WarningCircle size={14} weight="fill" className={accent} />
+                              <span className={`text-[13px] font-medium ${accent}`}>{m.name}</span>
+                              <span className="text-[10px] font-mono uppercase tracking-wider text-gray-7">{m.severity}</span>
+                            </div>
+                            <div className="text-[12px] text-gray-10 mb-1">{m.message}</div>
+                            <div className="text-[11px] text-gray-7 font-mono truncate" title={m.paths.join('\n')}>
+                              {m.paths.slice(0, 3).join(', ')}{m.paths.length > 3 ? `, +${m.paths.length - 3} more` : ''}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                   <MarkdownEditor
                     content={task.plan_content}
                     onSave={(md) => onUpdate(task.id, { plan_content: md })}

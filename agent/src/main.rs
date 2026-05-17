@@ -15,6 +15,7 @@ mod git;
 mod models;
 mod notifications;
 mod onboarding;
+mod policies;
 mod profiles;
 mod queue;
 mod reviewer;

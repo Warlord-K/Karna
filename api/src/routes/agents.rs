@@ -7,7 +7,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use karna_shared::{cache, models::AgentProfile};
+use karna_shared::{
+    cache,
+    models::{AgentProfile, AgentTask, PrReview},
+};
 
 use crate::AppState;
 
@@ -100,6 +103,70 @@ pub async fn delete(
         return Err(StatusCode::NOT_FOUND);
     }
     Ok(Json(json!({ "ok": true })))
+}
+
+pub async fn get(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<AgentProfile>, StatusCode> {
+    let profile = state
+        .db
+        .get_agent_profile(id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(profile))
+}
+
+#[derive(Serialize)]
+pub struct AgentStats {
+    pub total_tasks: i64,
+    pub open_tasks: i64,
+    pub prs_opened: i64,
+    pub reviews_done: i64,
+    pub cost_usd: f64,
+}
+
+pub async fn stats(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<AgentStats>, StatusCode> {
+    let (total_tasks, open_tasks, prs_opened, reviews_done, cost_usd) = state
+        .db
+        .agent_profile_stats(id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(AgentStats {
+        total_tasks,
+        open_tasks,
+        prs_opened,
+        reviews_done,
+        cost_usd,
+    }))
+}
+
+pub async fn tasks(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<AgentTask>>, StatusCode> {
+    let rows = state
+        .db
+        .list_tasks_for_agent(id, 50)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(rows))
+}
+
+pub async fn reviews(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<PrReview>>, StatusCode> {
+    let rows = state
+        .db
+        .list_pr_reviews_by_agent(id, 50)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(rows))
 }
 
 /// Unified list of "things a task can be assigned to" — humans + agent profiles —

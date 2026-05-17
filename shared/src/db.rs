@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::cache;
-use crate::models::{AgentLog, AgentProfile, AgentTask, PrReview, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment};
+use crate::models::{AgentLog, AgentProfile, AgentTask, Policy, PrReview, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment};
 
 #[derive(Clone)]
 pub struct Database {
@@ -1548,6 +1548,61 @@ impl Database {
         Ok(result.rows_affected())
     }
 
+    /// Aggregate counts + rolling cost for an agent profile.
+    /// Returns `(total_tasks, open_tasks, prs_opened, reviews_done, cost_usd)`.
+    pub async fn agent_profile_stats(&self, id: Uuid) -> Result<(i64, i64, i64, i64, f64)> {
+        let (total, open, prs, cost): (i64, i64, i64, f64) = sqlx::query_as(
+            r#"SELECT
+                 COUNT(*) AS total,
+                 COUNT(*) FILTER (WHERE status NOT IN ('done', 'failed', 'cancelled')) AS open,
+                 COUNT(*) FILTER (WHERE pr_url IS NOT NULL) AS prs,
+                 COALESCE(SUM(cost_usd), 0)::FLOAT8 AS cost
+               FROM agent_tasks
+               WHERE assigned_agent_id = $1"#,
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let reviews: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pr_reviews WHERE reviewer_agent_id = $1",
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok((total, open, prs, reviews, cost))
+    }
+
+    /// Tasks assigned to an agent profile, most recent first.
+    pub async fn list_tasks_for_agent(&self, id: Uuid, limit: i64) -> Result<Vec<AgentTask>> {
+        let rows = sqlx::query_as::<_, AgentTask>(
+            r#"SELECT * FROM agent_tasks
+               WHERE assigned_agent_id = $1
+               ORDER BY updated_at DESC NULLS LAST
+               LIMIT $2"#,
+        )
+        .bind(id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn list_pr_reviews_by_agent(&self, id: Uuid, limit: i64) -> Result<Vec<PrReview>> {
+        let rows = sqlx::query_as::<_, PrReview>(
+            r#"SELECT * FROM pr_reviews
+               WHERE reviewer_agent_id = $1
+               ORDER BY created_at DESC
+               LIMIT $2"#,
+        )
+        .bind(id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     pub async fn delete_agent_profile(&self, id: Uuid) -> Result<u64> {
         // FK on agent_tasks.assigned_agent_id uses ON DELETE SET NULL — tasks
         // assigned to this profile drop back to "any agent" instead of being deleted.
@@ -1565,6 +1620,133 @@ impl Database {
     async fn bust_agents(&self) {
         let Some(r) = &self.redis else { return };
         cache::invalidate(r, cache::AGENTS_LIST_KEY).await;
+    }
+
+    async fn bust_policies(&self) {
+        let Some(r) = &self.redis else { return };
+        cache::invalidate(r, cache::POLICIES_LIST_KEY).await;
+    }
+
+    // --- Policy queries ---
+
+    pub async fn list_policies(&self) -> Result<Vec<Policy>> {
+        let rows = sqlx::query_as::<_, Policy>(
+            "SELECT * FROM policies ORDER BY enabled DESC, created_at ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Only enabled policies — used by the planner's policy scan.
+    pub async fn list_active_policies(&self) -> Result<Vec<Policy>> {
+        let rows = sqlx::query_as::<_, Policy>(
+            "SELECT * FROM policies WHERE enabled = TRUE",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_policy(
+        &self,
+        name: &str,
+        repo_pattern: &str,
+        path_glob: &str,
+        message: &str,
+        severity: &str,
+    ) -> Result<Policy> {
+        let row = sqlx::query_as::<_, Policy>(
+            r#"INSERT INTO policies (name, repo_pattern, path_glob, message, severity)
+               VALUES ($1, $2, $3, $4, $5)
+               RETURNING *"#,
+        )
+        .bind(name)
+        .bind(repo_pattern)
+        .bind(path_glob)
+        .bind(message)
+        .bind(severity)
+        .fetch_one(&self.pool)
+        .await?;
+        self.bust_policies().await;
+        Ok(row)
+    }
+
+    pub async fn update_policy(
+        &self,
+        id: Uuid,
+        updates: &serde_json::Value,
+    ) -> Result<u64> {
+        let obj = match updates.as_object() {
+            Some(o) => o,
+            None => return Ok(0),
+        };
+
+        let mut set_parts: Vec<String> = Vec::new();
+        let mut bind_idx = 1u32;
+        let mut string_vals: Vec<Option<String>> = Vec::new();
+
+        let text_fields = ["name", "repo_pattern", "path_glob", "message", "severity"];
+        for field in &text_fields {
+            if let Some(val) = obj.get(*field) {
+                set_parts.push(format!("\"{}\" = ${}", field, bind_idx));
+                string_vals.push(val.as_str().map(|s| s.to_string()));
+                bind_idx += 1;
+            }
+        }
+        if let Some(val) = obj.get("enabled") {
+            if let Some(b) = val.as_bool() {
+                set_parts.push(format!("enabled = {b}"));
+            }
+        }
+        if set_parts.is_empty() {
+            return Ok(0);
+        }
+        set_parts.push("updated_at = NOW()".to_string());
+        let sql = format!(
+            "UPDATE policies SET {} WHERE id = ${}",
+            set_parts.join(", "),
+            bind_idx,
+        );
+        let mut query = sqlx::query(&sql);
+        for val in &string_vals {
+            match val {
+                Some(s) => query = query.bind(s),
+                None => query = query.bind(None::<String>),
+            }
+        }
+        query = query.bind(id);
+        let result = query.execute(&self.pool).await?;
+        if result.rows_affected() > 0 {
+            self.bust_policies().await;
+        }
+        Ok(result.rows_affected())
+    }
+
+    pub async fn delete_policy(&self, id: Uuid) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM policies WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if result.rows_affected() > 0 {
+            self.bust_policies().await;
+        }
+        Ok(result.rows_affected())
+    }
+
+    pub async fn set_task_policy_matches(
+        &self,
+        id: Uuid,
+        matches: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        sqlx::query("UPDATE agent_tasks SET policy_matches = $1 WHERE id = $2")
+            .bind(matches)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        self.bust_tasks(Some(id)).await;
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]

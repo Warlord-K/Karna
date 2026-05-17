@@ -107,6 +107,9 @@ pub struct AgentTask {
     /// NULL = any active agent profile may pick it up.
     /// Set = only the named agent profile picks it up.
     pub assigned_agent_id: Option<Uuid>,
+    /// Policies that fired against this task's plan. Shape:
+    /// `[{policy_id, name, severity, message, paths: [...]}]`.
+    pub policy_matches: Option<serde_json::Value>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
@@ -261,6 +264,23 @@ pub struct ScheduledRunLog {
     pub level: String,
     pub message: String,
     pub created_at: Option<DateTime<Utc>>,
+}
+
+// --- Policy models ---
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Policy {
+    pub id: Uuid,
+    pub name: String,
+    /// Repo glob: "owner/repo" exact, "owner/*" prefix, "*" all.
+    pub repo_pattern: String,
+    /// Path glob (supports `**` and `*`) against files mentioned in plan_content.
+    pub path_glob: String,
+    pub message: String,
+    pub severity: String,
+    pub enabled: bool,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 // --- Agent profile models ---

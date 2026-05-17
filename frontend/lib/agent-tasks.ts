@@ -37,6 +37,8 @@ export interface AgentTask {
   parent_task_id: string | null;
   /** Agent profile UUID. NULL = any active agent profile picks it up. */
   assigned_agent_id: string | null;
+  /** Policies that fired against this task's plan (set after planner finishes). */
+  policy_matches: import('./policies').PolicyMatch[] | null;
   /** "linear" | "clickup" — origin of an ingested task. */
   external_source: string | null;
   external_id: string | null;
