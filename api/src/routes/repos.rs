@@ -54,6 +54,11 @@ pub async fn add(
 #[derive(Deserialize)]
 pub struct UpdateRepo {
     sync_issues: Option<bool>,
+    review_prs: Option<bool>,
+    /// Omitted = unchanged; explicit `null` = clear; UUID string = set.
+    /// Modeled as raw JSON so we can distinguish "absent" from "null".
+    #[serde(default)]
+    review_agent_id: Option<Value>,
 }
 
 pub async fn update(
@@ -66,6 +71,24 @@ pub async fn update(
         state
             .db
             .update_repo_sync_issues(id, sync_issues)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    let review_agent_change: Option<Option<Uuid>> = match body.review_agent_id {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::String(s)) => match Uuid::parse_str(&s) {
+            Ok(u) => Some(Some(u)),
+            Err(_) => return Err(StatusCode::BAD_REQUEST),
+        },
+        Some(_) => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    if body.review_prs.is_some() || review_agent_change.is_some() {
+        state
+            .db
+            .update_repo_review_config(id, body.review_prs, review_agent_change)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }

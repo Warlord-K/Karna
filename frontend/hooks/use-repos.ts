@@ -61,8 +61,14 @@ export function useDeleteRepo() {
 export function useUpdateRepo() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { sync_issues?: boolean } }) =>
-      updateRepo(id, data),
+    mutationFn: ({ id, data }: {
+      id: string;
+      data: {
+        sync_issues?: boolean;
+        review_prs?: boolean;
+        review_agent_id?: string | null;
+      };
+    }) => updateRepo(id, data),
     onMutate: async ({ id, data }) => {
       await qc.cancelQueries({ queryKey: repoKeys.lists() });
       const prev = qc.getQueryData<RepoProfile[]>(repoKeys.lists());

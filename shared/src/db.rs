@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::cache;
-use crate::models::{AgentLog, AgentProfile, AgentTask, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment};
+use crate::models::{AgentLog, AgentProfile, AgentTask, PrReview, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment};
 
 #[derive(Clone)]
 pub struct Database {
@@ -1152,6 +1152,134 @@ impl Database {
             .await?;
         self.bust_repos().await;
         Ok(())
+    }
+
+    /// Update PR-review opt-in + which agent profile reviews PRs for this repo.
+    /// Either field can be passed as `None` to leave it unchanged.
+    pub async fn update_repo_review_config(
+        &self,
+        id: Uuid,
+        review_prs: Option<bool>,
+        review_agent_id: Option<Option<Uuid>>,
+    ) -> Result<u64> {
+        let mut set_parts: Vec<String> = Vec::new();
+        let mut bind_idx = 1u32;
+
+        if review_prs.is_some() {
+            set_parts.push(format!("review_prs = ${bind_idx}"));
+            bind_idx += 1;
+        }
+        if review_agent_id.is_some() {
+            set_parts.push(format!("review_agent_id = ${bind_idx}"));
+            bind_idx += 1;
+        }
+        if set_parts.is_empty() {
+            return Ok(0);
+        }
+        let sql = format!(
+            "UPDATE repo_profiles SET {} WHERE id = ${}",
+            set_parts.join(", "),
+            bind_idx,
+        );
+        let mut query = sqlx::query(&sql);
+        if let Some(b) = review_prs {
+            query = query.bind(b);
+        }
+        if let Some(opt) = review_agent_id {
+            query = query.bind(opt);
+        }
+        query = query.bind(id);
+        let result = query.execute(&self.pool).await?;
+        if result.rows_affected() > 0 {
+            self.bust_repos().await;
+        }
+        Ok(result.rows_affected())
+    }
+
+    /// Look up an existing review for a (repo, head_sha) pair. Used to dedupe
+    /// before kicking off another review on the same commit.
+    pub async fn find_pr_review(&self, repo: &str, head_sha: &str) -> Result<Option<PrReview>> {
+        let row = sqlx::query_as::<_, PrReview>(
+            "SELECT * FROM pr_reviews WHERE repo = $1 AND head_sha = $2",
+        )
+        .bind(repo)
+        .bind(head_sha)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Insert a `running` review row. Returns `None` if a row for (repo, head_sha)
+    /// already exists — race-safe via the UNIQUE constraint — so the caller can
+    /// skip cleanly when two webhook firings overlap.
+    pub async fn start_pr_review(
+        &self,
+        repo: &str,
+        pr_number: i32,
+        pr_url: Option<&str>,
+        head_sha: &str,
+        author: Option<&str>,
+        reviewer_agent_id: Option<Uuid>,
+    ) -> Result<Option<PrReview>> {
+        let row = sqlx::query_as::<_, PrReview>(
+            r#"INSERT INTO pr_reviews
+                 (repo, pr_number, pr_url, head_sha, author, reviewer_agent_id, status)
+               VALUES ($1, $2, $3, $4, $5, $6, 'running')
+               ON CONFLICT (repo, head_sha) DO NOTHING
+               RETURNING *"#,
+        )
+        .bind(repo)
+        .bind(pr_number)
+        .bind(pr_url)
+        .bind(head_sha)
+        .bind(author)
+        .bind(reviewer_agent_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn complete_pr_review(
+        &self,
+        id: Uuid,
+        status: &str,
+        comments_posted: i32,
+        cost_usd: f64,
+        error_message: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"UPDATE pr_reviews
+               SET status = $1, comments_posted = $2, cost_usd = $3,
+                   error_message = $4, completed_at = NOW()
+               WHERE id = $5"#,
+        )
+        .bind(status)
+        .bind(comments_posted)
+        .bind(cost_usd)
+        .bind(error_message)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Most recent reviews for a repo — for the eventual repo detail "Reviews" tab.
+    pub async fn list_pr_reviews_for_repo(
+        &self,
+        repo: &str,
+        limit: i64,
+    ) -> Result<Vec<PrReview>> {
+        let rows = sqlx::query_as::<_, PrReview>(
+            r#"SELECT * FROM pr_reviews
+               WHERE repo = $1
+               ORDER BY created_at DESC
+               LIMIT $2"#,
+        )
+        .bind(repo)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     pub async fn delete_repo_profile(&self, id: Uuid) -> Result<()> {

@@ -17,6 +17,7 @@ mod notifications;
 mod onboarding;
 mod profiles;
 mod queue;
+mod reviewer;
 mod scheduler;
 mod updater;
 

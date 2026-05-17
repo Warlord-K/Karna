@@ -117,6 +117,23 @@ export function RepoCard({ repo, onClick, onOnboard, onDelete }: RepoCardProps) 
           );
         })()}
 
+        {repo.review_prs && (() => {
+          const webhookOk = repo.webhook_status === 'registered';
+          const tone = webhookOk
+            ? 'bg-purple-500/15 text-purple-400 border border-purple-500/30'
+            : 'bg-amber-500/15 text-amber-400 border border-amber-500/30';
+          return (
+            <span
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] ${tone}`}
+              title={webhookOk ? 'Auto-review PRs enabled' : 'Auto-review PRs enabled, but webhook is not live'}
+            >
+              reviews
+              {!webhookOk && <span aria-hidden>·</span>}
+              {!webhookOk && <span className="font-mono uppercase tracking-wide text-[10px]">no hook</span>}
+            </span>
+          );
+        })()}
+
         {repo.last_onboarded_at && (
           <span className="ml-auto text-gray-7">
             onboarded {formatDistanceToNow(new Date(repo.last_onboarded_at), { addSuffix: true })}

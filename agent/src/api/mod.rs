@@ -216,10 +216,16 @@ async fn github_webhook(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    // Only handle agent branches ({prefix}-{number}/slug format)
-    if !branch.contains('/') || !branch.split('/').next().is_some_and(|p| {
+    // Non-agent branches (human-opened PRs) — route to the auto-reviewer
+    // when the event is a PR open / re-open / synchronize. Drafts are skipped.
+    let is_agent_branch = branch.contains('/') && branch.split('/').next().is_some_and(|p| {
         p.rfind('-').is_some_and(|i| p[i + 1..].chars().all(|c| c.is_ascii_digit()) && i > 0)
-    }) {
+    });
+    if !is_agent_branch {
+        if event == "pull_request" && matches!(action, "opened" | "reopened" | "synchronize") {
+            return handle_pr_review_trigger(&state, &payload, branch).await;
+        }
+        // Other events on human PRs — ignore.
         return StatusCode::OK;
     }
 
@@ -327,6 +333,85 @@ async fn github_webhook(
     }
 
     StatusCode::OK
+}
+
+/// PR opened / synchronized / reopened on a non-agent branch → if the repo
+/// has `review_prs = TRUE`, run a read-only review. Drafts are skipped.
+/// Concurrent triggers on the same `head_sha` dedupe via the UNIQUE index on
+/// `pr_reviews`. The actual review runs in a tokio task so the webhook
+/// returns immediately.
+async fn handle_pr_review_trigger(
+    state: &AppState,
+    payload: &serde_json::Value,
+    branch: &str,
+) -> StatusCode {
+    // Skip drafts — let the author finish before we review.
+    if payload
+        .pointer("/pull_request/draft")
+        .and_then(|v| v.as_bool())
+        == Some(true)
+    {
+        info!(branch, "Webhook: skipping PR review for draft");
+        return StatusCode::OK;
+    }
+
+    let repo = match payload.pointer("/repository/full_name").and_then(|v| v.as_str()) {
+        Some(r) => r.to_string(),
+        None => return StatusCode::OK,
+    };
+    let pr_number = match payload.pointer("/pull_request/number").and_then(|v| v.as_i64()) {
+        Some(n) => n as i32,
+        None => return StatusCode::OK,
+    };
+    let pr_url = payload
+        .pointer("/pull_request/html_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let head_sha = match payload.pointer("/pull_request/head/sha").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => return StatusCode::OK,
+    };
+    let author = payload
+        .pointer("/pull_request/user/login")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let branch = branch.to_string();
+
+    // Bail early without spinning up a task if the per-repo flag is off.
+    // (The reviewer re-checks this — this is just to avoid the tokio spawn.)
+    match state.db.get_repo_profile(&repo).await {
+        Ok(Some(p)) if !p.review_prs => {
+            info!(repo = %repo, pr = pr_number, "PR review disabled for repo, skipping");
+            return StatusCode::OK;
+        }
+        Ok(None) => {
+            info!(repo = %repo, pr = pr_number, "No profile for repo, skipping PR review");
+            return StatusCode::OK;
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to look up repo profile for PR review");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+        Ok(Some(_)) => {}
+    }
+
+    let config = state.config.clone();
+    let db = state.db.clone();
+    tokio::spawn(async move {
+        let req = crate::reviewer::ReviewRequest {
+            repo: &repo,
+            pr_number,
+            pr_url: pr_url.as_deref(),
+            head_sha: &head_sha,
+            author: author.as_deref(),
+            branch: &branch,
+        };
+        if let Err(e) = crate::reviewer::maybe_review_pr(config, db, req).await {
+            warn!(error = %e, repo = %repo, pr = pr_number, "PR review failed");
+        }
+    });
+
+    StatusCode::ACCEPTED
 }
 
 async fn handle_issue_opened(state: &AppState, payload: &serde_json::Value) -> StatusCode {

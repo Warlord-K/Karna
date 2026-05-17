@@ -85,7 +85,8 @@ karna/
 │   ├── 013_repo_sync_issues.sql # Per-repo GitHub issue sync toggle
 │   ├── 014_assignee_and_external.sql # Human assignment + Linear/ClickUp source fields
 │   ├── 015_webhook_status.sql   # Per-repo webhook registration outcome (status/url/error)
-│   └── 016_agent_profiles.sql   # Named agent identities + agent_tasks.assigned_agent_id
+│   ├── 016_agent_profiles.sql   # Named agent identities + agent_tasks.assigned_agent_id
+│   └── 017_pr_reviews.sql       # pr_reviews + repo_profiles.review_prs / .review_agent_id
 ├── Cargo.toml                   # Workspace root (members: agent, api, shared)
 ├── shared/
 │   ├── Cargo.toml
@@ -197,6 +198,10 @@ karna/
   - `profile_json` (JSONB) — structured data: language, framework, commands, directories, CI
   - `last_commit_sha` (TEXT) — tracks staleness (HEAD changed since last onboard)
   - `cost_usd` (DOUBLE PRECISION) — accumulated onboarding cost
+  - `sync_issues` (BOOLEAN) — when TRUE, GitHub issues on this repo become tasks
+  - `review_prs` (BOOLEAN) — when TRUE, the agent auto-reviews human-opened PRs
+  - `review_agent_id` (UUID, nullable) — FK to `agent_profiles.id`; NULL = use config defaults
+- `pr_reviews` — One row per (repo, head_sha) PR review attempt; UNIQUE constraint dedupes concurrent webhook firings; tracks status, reviewer agent, comments_posted, cost_usd
 
 ## Task State Machine
 
@@ -576,6 +581,56 @@ The outcome is persisted on `repo_profiles.webhook_status` (`registered` | `fail
 - `agent/src/onboarding.rs` — Calls webhook registration after repo profile is stored
 - `agent/src/config.rs` — `webhook_url` derivation (AGENT_WEBHOOK_URL → TUNNEL_AGENT_HOSTNAME → None)
 - `frontend/app/api/tasks/[id]/comments/route.ts` — Frontend comment → feedback path
+
+## Auto-Review of Human-Opened PRs
+
+When a teammate opens a PR (or force-pushes new commits) on a repo with `review_prs = TRUE`, the agent runs a read-only review and posts a single review comment via `gh pr review`. Uses your existing Claude/Codex subscription — no extra cost.
+
+**Trigger:** the existing `/webhooks/github` agent endpoint. The `pull_request` event was already subscribed (no webhook re-registration needed). The branch filter routes PR open / synchronize / reopened events:
+
+- Branch starts with `{prefix}-{N}/` (agent's own PR) → existing feedback path
+- Otherwise → human-opened PR → `handle_pr_review_trigger` in [agent/src/api/mod.rs](agent/src/api/mod.rs)
+
+**Per-repo opt-in.** Reviews are off by default. Two toggles on `repo_profiles`:
+
+- `review_prs BOOLEAN` — opt-in. Surfaced as a switch in the repo detail modal under "Settings."
+- `review_agent_id UUID NULL` — which agent profile reviews PRs for this repo. NULL means use config defaults. Recommended for cost control: pick a cheap model (e.g. haiku / gpt-5.4-mini).
+
+**Skipped automatically:**
+- Drafts (`pull_request.draft = true`)
+- Branches starting with `{prefix}-{N}/` (agent's own PRs go through the implementer feedback path, not the reviewer)
+- Repos without `review_prs = TRUE`
+- Re-runs on the same `head_sha` — UNIQUE `(repo, head_sha)` on `pr_reviews` dedupes concurrent webhook firings race-safely. Force-pushes (new SHA) get a fresh review.
+
+**Reviewer module** ([agent/src/reviewer.rs](agent/src/reviewer.rs)):
+
+- Runs the CLI with `allowed_tools = "Read,Glob,Grep,Bash"` (no Edit/Write).
+- System prompt locks the agent to substantive issues only: bugs, security, correctness, missing edge cases. Style/naming/lint-equivalents are explicitly forbidden. If the diff is clean, the agent posts a brief "looks good" comment rather than manufacturing findings.
+- Agent uses `gh pr diff <pr>` + `gh pr view <pr> --json files,title,body` to see the change, reads surrounding code with Read/Glob/Grep, and posts exactly one review via `gh pr review <pr> --comment --body "..."` from its Bash tool.
+- `--approve` / `--request-changes` are forbidden — review is comment-only so humans always own the merge decision.
+- Working dir is the pre-cloned `repos_dir/<repo>` (no per-review checkout; review is read-only).
+
+**State** (`pr_reviews` table):
+
+| Column | Purpose |
+|---|---|
+| `(repo, head_sha)` UNIQUE | Dedupe; resync triggers on force-push but not on same SHA |
+| `status` | `pending` → `running` → `completed` / `failed` / `skipped` |
+| `reviewer_agent_id` | Which agent profile ran the review (FK SET NULL on profile delete) |
+| `cost_usd` | Theoretical quota burn from CLI output (subscription doesn't charge this — see "Agent Profiles" note on cost tracking) |
+| `comments_posted` | Reserved for future structured-comment posting; currently 0 |
+
+**Frontend:**
+- Repo detail modal ([repo-detail-modal.tsx](frontend/components/agent/repo-detail-modal.tsx)) has an "Auto-review PRs" toggle and a "Review agent" dropdown that appears when the toggle is on. Amber callout when the webhook isn't `registered` — reviews can't fire without a live webhook.
+- Repo card ([repo-card.tsx](frontend/components/agent/repo-card.tsx)) shows a purple `reviews` badge when enabled (amber with `no hook` when the webhook isn't live).
+
+**Cost model — important:** `cost_usd` on `pr_reviews` is the same theoretical-API-equivalent figure that the Claude CLI emits (`total_cost_usd` in the stream JSON). With a subscription, you aren't billed it — but it's a useful proxy for quota burn. To minimize quota impact, set `review_agent_id` to a cheap-model profile (haiku, gpt-5.4-mini) per repo.
+
+**Key files:**
+- [agent/src/reviewer.rs](agent/src/reviewer.rs) — Review orchestration + system prompt
+- [agent/src/api/mod.rs](agent/src/api/mod.rs) — `handle_pr_review_trigger` webhook arm
+- [shared/src/db.rs](shared/src/db.rs) — `start_pr_review` (race-safe insert), `complete_pr_review`, `update_repo_review_config`
+- [api/src/routes/repos.rs](api/src/routes/repos.rs) — PATCH accepts `review_prs` + `review_agent_id` (null clears)
 
 ## Redis Queue Protocol
 

@@ -2,6 +2,7 @@
 
 import { RepoProfile, REPO_STATUS_COLORS, REPO_STATUS_LABELS } from '@/lib/repos';
 import { useUpdateRepo } from '@/hooks/use-repos';
+import { useAgents } from '@/hooks/use-tasks';
 import { X, ArrowsClockwise, Trash, GitBranch } from '@phosphor-icons/react';
 import { MarkdownContent } from './markdown-content';
 
@@ -14,6 +15,7 @@ interface RepoDetailModalProps {
 
 export function RepoDetailModal({ repo, onClose, onOnboard, onDelete }: RepoDetailModalProps) {
   const updateMutation = useUpdateRepo();
+  const { data: agents = [] } = useAgents(!!repo);
 
   if (!repo) return null;
 
@@ -101,6 +103,63 @@ export function RepoDetailModal({ repo, onClose, onOnboard, onDelete }: RepoDeta
             </div>
 
             {repo.sync_issues && <WebhookStatusRow repo={repo} />}
+
+            <div className="bg-gray-2 rounded-lg border border-gray-3 px-3 py-2.5 flex items-center justify-between">
+              <div>
+                <div className="text-[13px] text-gray-12">Auto-review PRs</div>
+                <div className="text-[11px] text-gray-7 mt-0.5">
+                  When a teammate opens a PR, the agent posts a single review comment.
+                  Uses your existing CLI subscription — no extra cost.
+                </div>
+              </div>
+              <button
+                onClick={() => updateMutation.mutate({ id: repo.id, data: { review_prs: !repo.review_prs } })}
+                className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${
+                  repo.review_prs ? 'bg-sun-9' : 'bg-gray-5'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
+                    repo.review_prs ? 'translate-x-4' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {repo.review_prs && (
+              <>
+                <div className="bg-gray-2 rounded-lg border border-gray-3 px-3 py-2.5 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13px] text-gray-12">Review agent</div>
+                    <div className="text-[11px] text-gray-7 mt-0.5">
+                      Which agent profile reviews PRs for this repo. Pick a cheap model to keep quota burn low.
+                    </div>
+                  </div>
+                  <select
+                    value={repo.review_agent_id ?? ''}
+                    onChange={(e) =>
+                      updateMutation.mutate({
+                        id: repo.id,
+                        data: { review_agent_id: e.target.value === '' ? null : e.target.value },
+                      })
+                    }
+                    className="h-8 px-2 rounded-md text-[12px] border bg-gray-3 border-gray-5 text-gray-12 cursor-pointer focus:outline-none flex-shrink-0"
+                  >
+                    <option value="">Default agent</option>
+                    {agents.map((a) => (
+                      <option key={a.id} value={a.id} disabled={!!a.paused_reason}>
+                        {a.avatar_emoji} {a.name}{a.paused_reason ? ' (paused)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {repo.webhook_status !== 'registered' && (
+                  <div className="bg-amber-400/10 rounded-lg border border-amber-400/20 px-3 py-2 text-[12px] text-amber-300">
+                    PR reviews need a registered webhook. Webhook is currently <code className="font-mono">{repo.webhook_status}</code> — reviews will only fire once a webhook URL is configured and registered.
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           {/* Commands */}

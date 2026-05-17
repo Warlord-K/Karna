@@ -306,6 +306,29 @@ pub struct RepoProfile {
     pub webhook_status: String,
     pub webhook_error: Option<String>,
     pub webhook_url: Option<String>,
+    /// Opt-in: when TRUE, the agent reviews human-opened PRs on this repo.
+    pub review_prs: bool,
+    /// Which agent profile reviews PRs for this repo. NULL = default agent profile.
+    pub review_agent_id: Option<Uuid>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
+}
+
+// --- PR review records ---
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct PrReview {
+    pub id: Uuid,
+    pub repo: String,
+    pub pr_number: i32,
+    pub pr_url: Option<String>,
+    pub head_sha: String,
+    pub author: Option<String>,
+    pub reviewer_agent_id: Option<Uuid>,
+    pub status: String,
+    pub comments_posted: i32,
+    pub cost_usd: f64,
+    pub error_message: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
 }

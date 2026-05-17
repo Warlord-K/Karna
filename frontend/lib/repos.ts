@@ -14,6 +14,10 @@ export interface RepoProfile {
   error_message: string | null;
   cost_usd: number;
   sync_issues: boolean;
+  /** When TRUE, the agent auto-reviews human-opened PRs on this repo. */
+  review_prs: boolean;
+  /** Which agent profile reviews PRs for this repo. NULL = config default. */
+  review_agent_id: string | null;
   webhook_status: WebhookStatus;
   webhook_error: string | null;
   webhook_url: string | null;
@@ -49,7 +53,15 @@ export async function triggerOnboard(id: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to trigger onboarding');
 }
 
-export async function updateRepo(id: string, data: { sync_issues?: boolean }): Promise<RepoProfile> {
+export async function updateRepo(
+  id: string,
+  data: {
+    sync_issues?: boolean;
+    review_prs?: boolean;
+    /** Pass undefined to leave unchanged, `null` to clear, a UUID to set. */
+    review_agent_id?: string | null;
+  },
+): Promise<RepoProfile> {
   const res = await fetch(`${API_BASE}/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
