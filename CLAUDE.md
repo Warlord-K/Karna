@@ -86,7 +86,8 @@ karna/
 │   ├── 014_assignee_and_external.sql # Human assignment + Linear/ClickUp source fields
 │   ├── 015_webhook_status.sql   # Per-repo webhook registration outcome (status/url/error)
 │   ├── 016_agent_profiles.sql   # Named agent identities + agent_tasks.assigned_agent_id
-│   └── 017_pr_reviews.sql       # pr_reviews + repo_profiles.review_prs / .review_agent_id
+│   ├── 017_pr_reviews.sql       # pr_reviews + repo_profiles.review_prs / .review_agent_id
+│   └── 018_policies.sql         # Policies (advisory plan-review guardrails) + agent_tasks.policy_matches
 ├── Cargo.toml                   # Workspace root (members: agent, api, shared)
 ├── shared/
 │   ├── Cargo.toml
@@ -172,11 +173,13 @@ karna/
   - `model` (TEXT, nullable) — Model name ("sonnet", "gpt-5.4"); NULL = backend default
   - `assignee_user_id` (UUID, nullable) — NULL = agent picks up; set = assigned to a human (agent skips)
   - `assigned_agent_id` (UUID, nullable) — FK to `agent_profiles.id`. NULL = any agent profile picks it up; set = only that named agent profile picks it up
+  - `policy_matches` (JSONB, nullable) — policies that fired against this task's plan: `[{policy_id, name, severity, message, paths: [...]}]`. Populated by the planner after `set_plan`; rendered as a banner on the plan_review tab
   - `external_source` (TEXT, nullable) — origin if ingested ("linear" or "clickup")
   - `external_id` (TEXT, nullable) — ID in the external system (unique with source)
   - `external_url` (TEXT, nullable) — direct link to the external task
 - `agent_logs` — Append-only agent activity log per task (includes user comments with `log_type = 'comment'`)
 - `agent_profiles` — Named agent identities (one per `(cli, model)` from config, auto-seeded on startup); see "Agent Profiles" section below
+- `policies` — Advisory plan-review guardrails: `(name, repo_pattern, path_glob, message, severity, enabled)`; see "Policies" section below
 
 ### Schedule tables
 - `schedules` — Schedule definitions (cron or one-shot), prompt, repos, skills, MCP servers, task creation config
@@ -293,7 +296,15 @@ All data routes are served by the Rust API (`api/`). The frontend proxies `/api/
 | POST | /api/agents | Create custom agent profile |
 | PATCH | /api/agents/{id} | Update profile (rename, pause/unpause, set default) |
 | DELETE | /api/agents/{id} | Delete profile (tasks fall back to "any agent") |
+| GET | /api/agents/{id} | Single agent profile |
+| GET | /api/agents/{id}/stats | Aggregate counts: total/open tasks, PRs opened, reviews, rolling cost |
+| GET | /api/agents/{id}/tasks | Recent tasks assigned to this agent (50, by updated_at) |
+| GET | /api/agents/{id}/reviews | Recent PR reviews this agent ran (50, by created_at) |
 | GET | /api/assignables | Unified list of agents + humans for the assignee picker |
+| GET | /api/policies | List all policies (Redis-cached) |
+| POST | /api/policies | Create a policy |
+| PATCH | /api/policies/{id} | Update name / glob / message / severity / enabled |
+| DELETE | /api/policies/{id} | Delete a policy |
 | GET | /api/config | Config (repos, backends, skills, MCP servers) |
 
 **Frontend (Next.js, :3000) — auth only:**
@@ -483,6 +494,46 @@ Agents have identities. Instead of an anonymous "the agent," each (cli, model) p
 
 **Frontend:** the assignee picker in [tasks/new/page.tsx](frontend/app/(dashboard)/tasks/new/page.tsx) and [task-detail-modal.tsx](frontend/components/agent/task-detail-modal.tsx) is a single `<select>` with optgroups (`Any agent` default, then `Agents`, then `Humans`). Paused profiles render as disabled options. TaskCard shows a purple badge with the assigned agent's emoji + name when set; amber when the assigned agent is paused. Encoded picker value is `""` / `agent:<id>` / `user:<id>` for serialization through to the API.
 
+## Policies (Plan-Review Guardrails)
+
+Advisory rules that surface a banner on the plan_review tab when a task's plan touches sensitive paths. Today the agent does not gate the state transition — the human reviewer still controls approve/reject. Severity `block` is reserved for future enforcement and currently renders the same as `warn`.
+
+**Schema** ([migrations/018_policies.sql](migrations/018_policies.sql)):
+
+| Field | Notes |
+|---|---|
+| `repo_pattern` | `*` matches all, `owner/*` is an owner prefix, `owner/repo` is exact |
+| `path_glob` | Standard glob with `**` (any segments) + `*` (chars except `/`) |
+| `severity` | `warn` (amber banner) or `block` (red banner; future: dims approve button) |
+| `enabled` | Disabled policies are skipped by the scan |
+
+**Scan flow** ([agent/src/policies.rs](agent/src/policies.rs)):
+
+1. `planner` calls `policies::scan_and_persist` after `set_plan`.
+2. `extract_paths` parses the plan markdown for tokens that look like file paths (anything containing `/`, with URL/version noise filtered out, trailing `:line:col` stripped).
+3. For each active policy: `repo_match` against the task's repos (multi-repo parent only matches `*`), then `glob_match` against each extracted path.
+4. Hits are persisted on `agent_tasks.policy_matches` as JSON: `[{policy_id, name, severity, message, paths: [...]}]`.
+
+The scan is *advisory and failure-tolerant* — errors are logged and the planner continues. The path extractor is intentionally over-inclusive: better an extra banner than a missed migration.
+
+**UI:**
+- `/policies` page ([app/(dashboard)/policies/page.tsx](frontend/app/(dashboard)/policies/page.tsx)) — list, create, toggle, delete. Inline create form (no separate dialog).
+- Banner on the Plan tab of [task-detail-modal.tsx](frontend/components/agent/task-detail-modal.tsx) when `task.policy_matches` is non-empty. Amber for `warn`, red for `block`. Shows name, severity, message, and the first 3 matched paths.
+
+## Agent Profile Pages
+
+Each named agent gets a real profile page at `/agents/{id}` so they feel like teammates instead of an anonymous process.
+
+- `/agents` ([app/(dashboard)/agents/page.tsx](frontend/app/(dashboard)/agents/page.tsx)) — index of all profiles. Shows avatar emoji, name, cli/model, default flag, paused state. Link target for the agent badge on task cards.
+- `/agents/{id}` ([app/(dashboard)/agents/[id]/page.tsx](frontend/app/(dashboard)/agents/[id]/page.tsx)) — detail page with:
+  - Header: emoji, name, cli/model, default/paused badges, Pause/Resume + Set default + Edit actions.
+  - Stats row: total tasks, open tasks, PRs opened, reviews done, rolling cost_usd (theoretical quota burn; not a real bill — see Agent Profiles cost note).
+  - Edit form: rename, change emoji/cli/model, set `system_prompt_addendum` (extra prompt that's stacked on the global instructions file for this agent's runs).
+  - Recent tasks (50): linked back to `/tasks/{id}`.
+  - Recent PR reviews (50): linked to GitHub PR URLs.
+
+**Backing endpoints:** `GET /api/agents/{id}`, `/api/agents/{id}/stats`, `/api/agents/{id}/tasks`, `/api/agents/{id}/reviews`. The stats endpoint joins on `agent_tasks` + `pr_reviews` so the rolling cost is the sum across both the implementer and reviewer paths.
+
 ## Shared Workspace Mode (Small Teams)
 
 Set `KARNA_SHARED_WORKSPACE=true` (env on `api` + `agent`) to make Karna a single shared team workspace. Every signed-in user can see and edit every task, schedule, and repo — regardless of `user_id`. Auth is still required at login; pair with `SIGNUP_DISABLED=true` so only invited users can join.
@@ -657,6 +708,7 @@ cache:schedules:runs:{schedule_id}      # GET /api/schedules/{id}/runs
 cache:schedules:run_logs:{run_id}       # GET /api/schedules/{id}/runs/{run_id}/logs
 cache:repos:list                        # GET /api/repos
 cache:agents:list                       # GET /api/agents
+cache:policies:list                     # GET /api/policies
 cache:config                            # GET /api/config (also busted by repo writes)
 ```
 
