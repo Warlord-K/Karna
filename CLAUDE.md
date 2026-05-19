@@ -1058,7 +1058,11 @@ Multiple agent replicas require `ReadWriteMany` (RWX) storage for the workspace 
 
 ### File Sync
 
-Migration and skill files in `charts/karna/files/` are copies of the repo-root `migrations/` and `skills/` directories. Keep them in sync when modifying migrations or skills.
+`charts/karna/files/migrations/` and `charts/karna/files/skills/` mirror the repo-root `migrations/` and `skills/` dirs (the source of truth). Helm only bundles files inside the chart dir, so the chart copies must exist for `helm package` to pick them up.
+
+- The release workflow ([.github/workflows/release.yml](.github/workflows/release.yml)) `rsync`s both dirs before `helm package` — releases always ship from the canonical source even if the in-repo copies have drifted.
+- CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) fails the `helm` job when the dirs disagree, so PRs that touch migrations or skills can't merge without updating the chart copies.
+- Locally, after editing migrations or skills: `rsync -a --delete migrations/ charts/karna/files/migrations/` and the same for `skills/`.
 
 ### Extending the Agent Pod (Custom CLIs + Secrets)
 

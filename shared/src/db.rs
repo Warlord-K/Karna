@@ -519,25 +519,6 @@ impl Database {
         Ok(tasks)
     }
 
-    #[allow(dead_code)]
-    pub async fn check_parent_completion(&self, parent_id: Uuid) -> Result<bool> {
-        let row = sqlx::query_as::<_, (i64, i64)>(
-            r#"SELECT COUNT(*),
-                      COUNT(*) FILTER (WHERE status = 'done')
-               FROM agent_tasks WHERE parent_task_id = $1"#,
-        )
-        .bind(parent_id)
-        .fetch_one(&self.pool)
-        .await?;
-
-        let (total, done) = row;
-        if total > 0 && total == done {
-            self.update_status(parent_id, "done").await?;
-            return Ok(true);
-        }
-        Ok(false)
-    }
-
     // --- Attachment queries ---
 
     pub async fn get_task_attachments(&self, task_id: Uuid) -> Result<Vec<TaskAttachment>> {
@@ -1058,6 +1039,26 @@ impl Database {
             .await?;
         self.bust_repos().await;
         Ok(())
+    }
+
+    /// Atomically claim a repo for onboarding. Flips `pending`/`stale` → `onboarding`
+    /// in a single UPDATE so only one pod can win per repo. Returns true iff this
+    /// caller owns the claim and should proceed to onboard.
+    pub async fn try_claim_repo_for_onboarding(&self, id: Uuid) -> Result<bool> {
+        let row: Option<(Uuid,)> = sqlx::query_as(
+            "UPDATE repo_profiles SET status = 'onboarding'
+             WHERE id = $1 AND status IN ('pending', 'stale')
+             RETURNING id",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        if row.is_some() {
+            self.bust_repos().await;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     pub async fn set_repo_profile_data(

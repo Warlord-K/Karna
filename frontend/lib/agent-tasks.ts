@@ -200,7 +200,7 @@ export async function approveWithSubtasks(taskId: string): Promise<AgentTask[]> 
 }
 
 /** Parse subtask definitions from plan_content markdown */
-export function parseSubtasksFromPlan(planContent: string): { title: string; repo: string; description: string }[] {
+function parseSubtasksFromPlan(planContent: string): { title: string; repo: string; description: string }[] {
   const match = planContent.match(/<!--\s*subtasks\s*\n([\s\S]*?)\nsubtasks\s*-->/);
   if (!match) return [];
   try {

@@ -7,9 +7,11 @@ import {
   AgentLog,
   AgentTaskPriority,
   AgentTaskStatus,
+  UserSummary,
   hasSubtaskDefinitions,
   getTaskLabel,
   getTaskTitle,
+  userDisplayName,
 } from '@/lib/agent-tasks';
 import {
   useTasks,
@@ -19,11 +21,13 @@ import {
   useDeleteTask,
   useApproveWithSubtasks,
   usePostComment,
+  useUsers,
+  useAgents,
 } from '@/hooks/use-tasks';
 import {
   ArrowLeft, Trash, GitPullRequest, ArrowSquareOut, Check, X, Prohibit,
   ChatText, Article, FileText, Lightning, WarningCircle, ArrowCounterClockwise,
-  Clock, Stack, Terminal,
+  Clock, Stack, Terminal, Robot, User,
 } from '@phosphor-icons/react';
 import toast from 'react-hot-toast';
 import { MarkdownEditor } from '@/components/agent/markdown-editor';
@@ -54,6 +58,8 @@ export default function TaskDetailPage() {
 
   const { data: subtasks = [] } = useSubtasks(id, activeTab === 'subtasks');
   const { data: logs = [], isLoading: logsLoading } = useLogs(id, activeTab === 'activity');
+  const { data: users = [] } = useUsers(isReady);
+  const { data: agents = [] } = useAgents(isReady);
   const updateTaskMutation = useUpdateTask();
   const deleteTaskMutation = useDeleteTask();
   const approveSubtasksMutation = useApproveWithSubtasks();
@@ -88,6 +94,25 @@ export default function TaskDetailPage() {
   const handlePriorityChange = async (p: AgentTaskPriority) => {
     await onUpdate({ priority: p });
   };
+
+  const handleAssigneeChange = async (value: string) => {
+    const [kind, assignedId] = value ? value.split(':') : ['', ''];
+    await onUpdate({
+      assignee_user_id: kind === 'user' ? assignedId : null,
+      assigned_agent_id: kind === 'agent' ? assignedId : null,
+    });
+    if (kind === 'user') toast.success('Assigned to human');
+    else if (kind === 'agent') {
+      const profile = agents.find((a) => a.id === assignedId);
+      toast.success(`Assigned to ${profile ? profile.name : 'agent'}`);
+    } else toast.success('Handed back to any agent');
+  };
+
+  const currentAssignment: string = task.assignee_user_id
+    ? `user:${task.assignee_user_id}`
+    : task.assigned_agent_id
+      ? `agent:${task.assigned_agent_id}`
+      : '';
 
   const handleApprovePlan = async () => {
     setLoading(true);
@@ -275,6 +300,55 @@ export default function TaskDetailPage() {
               editable={['todo', 'plan_review', 'planning'].includes(task.status)}
             />
 
+            {/* Assignee picker */}
+            <div className="flex items-center gap-2.5 pt-4 border-t border-gray-3">
+              {task.assignee_user_id
+                ? <User size={14} weight="bold" className="text-blue-400" />
+                : <Robot size={14} weight="bold" className="text-gray-8" />}
+              <span className="text-[13px] text-gray-9 font-medium">Assigned to</span>
+              <select
+                value={currentAssignment}
+                onChange={(e) => handleAssigneeChange(e.target.value)}
+                className="h-7 px-2 rounded-md text-[12px] border bg-gray-3 border-gray-5 text-gray-12 cursor-pointer focus:outline-none ml-auto"
+              >
+                <option value="">Any agent</option>
+                {agents.length > 0 && (
+                  <optgroup label="Agents">
+                    {agents.map((a) => (
+                      <option key={a.id} value={`agent:${a.id}`} disabled={!!a.paused_reason}>
+                        {a.avatar_emoji} {a.name}{a.paused_reason ? ' (paused)' : ''}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {users.length > 0 && (
+                  <optgroup label="Humans">
+                    {users.map((u: UserSummary) => (
+                      <option key={u.id} value={`user:${u.id}`}>{userDisplayName(u)}</option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </div>
+
+            {task.external_source && (
+              <div className="flex items-center gap-2.5">
+                <ArrowSquareOut size={14} weight="bold" className="text-gray-8" />
+                <span className="text-[13px] text-gray-9 font-medium capitalize">{task.external_source}</span>
+                {task.external_id && <span className="text-[13px] text-gray-8 font-mono">{task.external_id}</span>}
+                {task.external_url && (
+                  <a
+                    href={task.external_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[13px] text-blue-400 hover:text-blue-300 ml-auto flex items-center gap-1 transition-colors"
+                  >
+                    Open <ArrowSquareOut size={12} weight="bold" />
+                  </a>
+                )}
+              </div>
+            )}
+
             {task.error_message && (
               <div className="flex items-start gap-3 p-4 rounded-lg bg-red-500/8 border border-red-500/15">
                 <WarningCircle size={16} weight="fill" className="text-red-400 mt-0.5 flex-shrink-0" />
@@ -314,6 +388,29 @@ export default function TaskDetailPage() {
           <div className="space-y-5">
             {task.plan_content ? (
               <>
+                {task.policy_matches && task.policy_matches.length > 0 && (
+                  <div className="space-y-2">
+                    {task.policy_matches.map((m) => {
+                      const tone = m.severity === 'block'
+                        ? 'bg-red-500/10 border-red-500/30'
+                        : 'bg-amber-500/10 border-amber-500/30';
+                      const accent = m.severity === 'block' ? 'text-red-300' : 'text-amber-300';
+                      return (
+                        <div key={m.policy_id} className={`rounded-lg border px-3 py-2.5 ${tone}`}>
+                          <div className="flex items-center gap-2 mb-1">
+                            <WarningCircle size={14} weight="fill" className={accent} />
+                            <span className={`text-[13px] font-medium ${accent}`}>{m.name}</span>
+                            <span className="text-[10px] font-mono uppercase tracking-wider text-gray-7">{m.severity}</span>
+                          </div>
+                          <div className="text-[12px] text-gray-10 mb-1">{m.message}</div>
+                          <div className="text-[11px] text-gray-7 font-mono truncate" title={m.paths.join('\n')}>
+                            {m.paths.slice(0, 3).join(', ')}{m.paths.length > 3 ? `, +${m.paths.length - 3} more` : ''}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 <MarkdownEditor
                   content={task.plan_content}
                   onSave={(md) => onUpdate({ plan_content: md })}

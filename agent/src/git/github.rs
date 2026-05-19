@@ -121,25 +121,6 @@ pub async fn get_pr_comments(
     Ok(comments)
 }
 
-#[allow(dead_code)]
-pub async fn check_pr_status(
-    worktree_path: &Path,
-    repo: &str,
-    pr_number: i32,
-) -> Result<String> {
-    let output = Command::new("gh")
-        .current_dir(worktree_path)
-        .args([
-            "pr", "checks",
-            &pr_number.to_string(),
-            "--repo", repo,
-        ])
-        .output()
-        .await?;
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
 fn extract_pr_number(url: &str) -> Option<i32> {
     url.rsplit('/').next()?.parse().ok()
 }

@@ -71,6 +71,28 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@v4
 
+      # The top-level migrations/ and skills/ dirs are the source of truth, but
+      # Helm only bundles files inside the chart dir, so charts/karna/files/
+      # must mirror them. Release re-syncs before packaging, but check here so
+      # contributors notice drift on the PR — the in-repo copies are what
+      # `helm template` reads in dev/CI off a fresh checkout.
+      - name: Check chart files are in sync with source dirs
+        run: |
+          if ! diff -qr migrations/ charts/karna/files/migrations/ > /tmp/migrations.diff; then
+            echo "::error::migrations/ and charts/karna/files/migrations/ are out of sync:"
+            cat /tmp/migrations.diff
+            echo ""
+            echo "Run: rsync -a --delete migrations/ charts/karna/files/migrations/"
+            exit 1
+          fi
+          if ! diff -qr skills/ charts/karna/files/skills/ > /tmp/skills.diff; then
+            echo "::error::skills/ and charts/karna/files/skills/ are out of sync:"
+            cat /tmp/skills.diff
+            echo ""
+            echo "Run: rsync -a --delete skills/ charts/karna/files/skills/"
+            exit 1
+          fi
+
       - name: Build dependencies
         run: helm dependency build charts/karna
 

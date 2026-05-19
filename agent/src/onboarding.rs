@@ -30,17 +30,24 @@ pub async fn sync_repo_profiles(config: &Config, db: &Database) -> Result<()> {
         }
     }
 
-    // Onboard all pending profiles (config repos + any added via UI before startup)
+    // Onboard all pending profiles (config repos + any added via UI before startup).
+    // Atomic DB claim ensures only one pod runs the CLI per repo when multiple
+    // agent pods race; losers skip and move on.
     let profiles = db.get_all_repo_profiles().await?;
     for profile in profiles {
-        if profile.status == "pending" {
-            info!(repo = %profile.repo, "Onboarding repo");
-            match onboard_repo(config, db, &profile).await {
-                Ok(()) => info!(repo = %profile.repo, "Repo onboarded successfully"),
-                Err(e) => {
-                    error!(repo = %profile.repo, error = %e, "Failed to onboard repo");
-                    let _ = db.set_repo_profile_error(profile.id, &format!("{e:#}")).await;
-                }
+        if profile.status != "pending" {
+            continue;
+        }
+        if !db.try_claim_repo_for_onboarding(profile.id).await.unwrap_or(false) {
+            // Another pod owns this onboarding run.
+            continue;
+        }
+        info!(repo = %profile.repo, "Onboarding repo");
+        match onboard_repo(config, db, &profile).await {
+            Ok(()) => info!(repo = %profile.repo, "Repo onboarded successfully"),
+            Err(e) => {
+                error!(repo = %profile.repo, error = %e, "Failed to onboard repo");
+                let _ = db.set_repo_profile_error(profile.id, &format!("{e:#}")).await;
             }
         }
     }
@@ -49,9 +56,9 @@ pub async fn sync_repo_profiles(config: &Config, db: &Database) -> Result<()> {
 }
 
 /// Onboard a single repo: clone, explore with CLI, parse output, store profile.
+/// Caller is responsible for atomically claiming the profile (flipping its status
+/// to `onboarding`) before invoking this — see [`try_claim_repo_for_onboarding`].
 async fn onboard_repo(config: &Config, db: &Database, profile: &RepoProfile) -> Result<()> {
-    db.set_repo_profile_status(profile.id, "onboarding").await?;
-
     // Ensure repo is cloned
     let repo_path = workspace::ensure_cloned(&config.repos_dir, &profile.repo, &config.github_token).await?;
     workspace::checkout_and_pull(&repo_path, &profile.branch).await?;
@@ -178,6 +185,11 @@ pub async fn reconcile_webhooks(config: &Config, db: &Database) -> Result<()> {
 
 /// Check for any pending or stale profiles and onboard them.
 /// Called from the poll loop to pick up repos added via UI after startup.
+///
+/// Multi-pod safety: each profile is claimed via an atomic SQL flip
+/// (`pending|stale → onboarding`). Pods that lose the race skip to the next
+/// profile, so N pods can onboard N different repos in parallel instead of one
+/// pod doing all the work while the others sit idle.
 pub async fn check_pending_onboards(config: &Config, db: &Database) -> Result<()> {
     let profiles = db.get_all_repo_profiles().await?;
     let pending: Vec<&RepoProfile> = profiles
@@ -190,6 +202,10 @@ pub async fn check_pending_onboards(config: &Config, db: &Database) -> Result<()
     }
 
     for profile in pending {
+        if !db.try_claim_repo_for_onboarding(profile.id).await.unwrap_or(false) {
+            // Another pod is onboarding this repo; move on.
+            continue;
+        }
         info!(repo = %profile.repo, status = %profile.status, "Onboarding repo from poll loop");
         match onboard_repo(config, db, profile).await {
             Ok(()) => info!(repo = %profile.repo, "Repo onboarded successfully"),

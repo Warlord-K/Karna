@@ -30,19 +30,6 @@ export type Assignable =
       paused: boolean;
     };
 
-export function isAgentAssignable(a: Assignable): a is Extract<Assignable, { type: 'agent' }> {
-  return a.type === 'agent';
-}
-
-export function isUserAssignable(a: Assignable): a is Extract<Assignable, { type: 'user' }> {
-  return a.type === 'user';
-}
-
-export function assignableLabel(a: Assignable): string {
-  if (a.type === 'agent') return `${a.avatar_emoji} ${a.name}`;
-  return a.name?.trim() || a.email?.trim() || a.id.slice(0, 8);
-}
-
 export async function fetchAgents(signal?: AbortSignal): Promise<AgentProfile[]> {
   const res = await fetch('/api/agents', { signal });
   if (!res.ok) throw new Error('Failed to fetch agents');

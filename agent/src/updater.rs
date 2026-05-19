@@ -21,17 +21,6 @@ impl SelfRepoChange {
         self.agent_code || self.frontend_code || self.infrastructure
     }
 
-    #[allow(dead_code)]
-    pub fn services_to_rebuild(&self) -> Vec<&'static str> {
-        let mut services = Vec::new();
-        if self.agent_code || self.infrastructure {
-            services.push("agent");
-        }
-        if self.frontend_code || self.infrastructure {
-            services.push("frontend");
-        }
-        services
-    }
 }
 
 /// Check if the self-repo has updates on its remote branch.
@@ -118,36 +107,6 @@ pub async fn check_self_repo(repo_path: &Path, branch: &str) -> Result<Option<Se
         local_sha,
         remote_sha,
     }))
-}
-
-#[allow(dead_code)]
-pub async fn signal_rebuild(
-    redis: &redis::Client,
-    change: &SelfRepoChange,
-) -> Result<()> {
-    let mut conn = redis.get_multiplexed_async_connection().await?;
-    let services = change.services_to_rebuild().join(",");
-    let value = serde_json::json!({
-        "services": services,
-        "from": &change.local_sha,
-        "to": &change.remote_sha,
-        "files": change.changed_files.len(),
-    });
-    redis::cmd("SET")
-        .arg("karna:self_update")
-        .arg(value.to_string())
-        .arg("EX")
-        .arg(3600_u64) // 1 hour TTL
-        .query_async::<Option<String>>(&mut conn)
-        .await?;
-
-    info!(
-        services = services,
-        from = &change.local_sha[..8],
-        to = &change.remote_sha[..8],
-        "Signaled rebuild via Redis"
-    );
-    Ok(())
 }
 
 #[derive(Debug)]

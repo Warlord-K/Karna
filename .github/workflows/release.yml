@@ -174,6 +174,19 @@ jobs:
           echo "--- Chart.yaml at $(git rev-parse --short HEAD) ---"
           head -10 charts/karna/Chart.yaml
 
+      # Top-level migrations/ and skills/ are the source of truth. Helm only
+      # bundles files inside the chart dir, so mirror them into charts/karna/files/
+      # before packaging. The in-repo copies are a convenience for `helm template`
+      # off a fresh checkout — release always re-syncs to be safe.
+      - name: Sync migrations and skills into chart
+        run: |
+          rsync -a --delete migrations/ charts/karna/files/migrations/
+          rsync -a --delete skills/ charts/karna/files/skills/
+          echo "--- chart migrations ---"
+          ls charts/karna/files/migrations/
+          echo "--- chart skills ---"
+          ls charts/karna/files/skills/
+
       - uses: azure/setup-helm@v4
 
       - name: Login to GHCR for Helm
