@@ -88,7 +88,9 @@ karna/
 │   ├── 016_agent_profiles.sql   # Named agent identities + agent_tasks.assigned_agent_id
 │   ├── 017_pr_reviews.sql       # pr_reviews + repo_profiles.review_prs / .review_agent_id
 │   ├── 018_policies.sql         # Policies (advisory plan-review guardrails) + agent_tasks.policy_matches
-│   └── 019_pr_review_logs.sql   # Per-review activity log for live progress streaming
+│   ├── 019_pr_review_logs.sql   # Per-review activity log for live progress streaming
+│   ├── 020_pr_review_findings.sql # Per-(path, line) findings for inline review comments
+│   └── 021_pr_review_finding_severity.sql # Severity tier (high/medium/low) per finding
 ├── Cargo.toml                   # Workspace root (members: agent, api, shared)
 ├── shared/
 │   ├── Cargo.toml
@@ -207,6 +209,7 @@ karna/
   - `review_agent_id` (UUID, nullable) — FK to `agent_profiles.id`; NULL = use config defaults
 - `pr_reviews` — One row per (repo, head_sha) PR review attempt; UNIQUE constraint dedupes concurrent webhook firings; tracks status, reviewer agent, comments_posted, cost_usd
 - `pr_review_logs` — Append-only per-review activity log streamed live from the CLI (tool calls, assistant text, errors). Powers the live progress modal
+- `pr_review_findings` — Per-(path, line) findings emitted by the reviewer CLI. `posted=true` rows became inline review comments via GitHub's Reviews API; `posted=false` rows didn't survive anchor validation (with `skip_reason`). Each finding carries `severity` (high/medium/low) which drives both the inline comment-body marker on GitHub and the badge color in the UI. Surfaced in the review-log-modal so reviewers can see both what landed inline and what got dropped
 
 ## Task State Machine
 
@@ -296,6 +299,7 @@ All data routes are served by the Rust API (`api/`). The frontend proxies `/api/
 | POST | /api/repos/{id}/webhook | Force webhook re-registration on next agent poll |
 | GET | /api/repos/{id}/reviews | List recent PR reviews for this repo (50, Redis-cached) |
 | GET | /api/repos/{id}/reviews/{review_id}/logs | Live activity log for one review (200, short TTL) |
+| GET | /api/repos/{id}/reviews/{review_id}/findings | Per-(path, line) findings for one review (posted + skipped) |
 | GET | /api/users | List users (id, name, email) for assignee dropdown |
 | GET | /api/agents | List agent profiles (Redis-cached) |
 | POST | /api/agents | Create custom agent profile |
@@ -668,10 +672,31 @@ The `pull_request` event was already subscribed (no webhook re-registration need
 **Reviewer module** ([agent/src/reviewer.rs](agent/src/reviewer.rs)):
 
 - Runs the CLI with `allowed_tools = "Read,Glob,Grep,Bash"` (no Edit/Write).
-- System prompt locks the agent to substantive issues only: bugs, security, correctness, missing edge cases. Style/naming/lint-equivalents are explicitly forbidden. If the diff is clean, the agent posts a brief "looks good" comment rather than manufacturing findings.
-- Agent uses `gh pr diff <pr>` + `gh pr view <pr> --json files,title,body` to see the change, reads surrounding code with Read/Glob/Grep, and posts exactly one review via `gh pr review <pr> --comment --body "..."` from its Bash tool.
+- System prompt locks the agent to substantive issues only: bugs, security, correctness, missing edge cases. Style/naming/lint-equivalents are explicitly forbidden. If the diff is clean, the agent posts a brief "looks good" summary with zero inline comments rather than manufacturing findings.
+- Agent uses `gh pr diff <pr>` + `gh pr view <pr> --json files,title,body` to see the change and reads surrounding code with Read/Glob/Grep. It does NOT post the review itself — instead, its final assistant message ends with a `<!-- findings ... findings -->` JSON block containing a `summary` string + a `comments[]` array of `{path, line, side, start_line?, body}` objects.
 - `--approve` / `--request-changes` are forbidden — review is comment-only so humans always own the merge decision.
 - Working dir is the pre-cloned `repos_dir/<repo>` (no per-review checkout; review is read-only).
+
+**Structured findings → inline comments** (replaces the old `gh pr review --body` flow):
+
+1. `parse_findings` (in [agent/src/reviewer.rs](agent/src/reviewer.rs)) extracts the `<!-- findings ... findings -->` block from the CLI's `result.output`. If parsing fails, the raw output is posted as a body-only review (fallback).
+2. `fetch_diff` runs `gh pr diff <pr> --repo <repo>` to get the unified diff, and `DiffIndex::parse` walks each hunk to build a `HashMap<(path, side), HashSet<line>>` of GitHub-acceptable anchors. Side `R` covers added + context lines (post-change line numbers); side `L` covers removed + context lines (pre-change line numbers).
+3. `validate_findings` filters every finding: line numbers not present in the diff, multi-line ranges with `start_line > line`, and empty bodies/paths get dropped to a `skipped` list with a `skip_reason` string.
+4. Every finding (posted-eligible + skipped) is persisted to `pr_review_findings` via `db.insert_pr_review_finding` so the UI can render both.
+5. `post_structured_review` POSTs once to `repos/{owner}/{repo}/pulls/{n}/reviews` via `gh api --input -` with `{event: "COMMENT", body, comments: [...]}`. The `comments[]` payload uses GitHub's review-comment shape (`path`, `line`, `side`, optional `start_line`/`start_side` for multi-line). If the POST fails entirely, a body-only review is posted as a last-resort fallback.
+6. Any skipped findings get appended to the body as a "couldn't anchor to the diff" footer so the PR author still sees the underlying concern.
+
+The validator is intentionally strict — GitHub rejects the *entire* review submission if a single inline comment anchors to a line outside the diff, so it's cheaper to drop a finding than to lose the whole review.
+
+**`pr_review_findings` table** ([migrations/020_pr_review_findings.sql](migrations/020_pr_review_findings.sql)):
+
+| Column | Purpose |
+|---|---|
+| `(path, line, start_line, side)` | Anchor on the PR diff. `side='RIGHT'` is the common case (additions/context on the new file); `side='LEFT'` only for comments on removed lines. `start_line` is set for multi-line ranges; NULL for single-line. |
+| `body` | Markdown body of the inline comment. |
+| `severity` | `high` / `medium` / `low`. `normalize_severity` coerces variants like `"HIGH"`, `"Sev: High"`, `"critical"`, `"nit"` into the canonical set so a forgetful model never trips the CHECK constraint. `severity_marker` prepends a colored emoji + bold label (`🔴 Sev: High`, `🟡 Sev: Medium`, `🔵 Sev: Low`) to the body when posting to GitHub so the tier shows on github.com without depending on the karna UI. |
+| `posted` | Whether the finding made it onto GitHub. `false` = dropped during validation or by GitHub. |
+| `skip_reason` | When `posted=false`, why (e.g. `"line 412 not in diff"`, `"empty body or path"`). NULL when posted. |
 
 **State** (`pr_reviews` table):
 
@@ -681,7 +706,7 @@ The `pull_request` event was already subscribed (no webhook re-registration need
 | `status` | `pending` (enqueued by webhook) → `running` (claimed by agent poll) → `completed` / `failed` / `skipped` |
 | `reviewer_agent_id` | Which agent profile ran the review (FK SET NULL on profile delete) |
 | `cost_usd` | Theoretical quota burn from CLI output (subscription doesn't charge this — see "Agent Profiles" note on cost tracking) |
-| `comments_posted` | Reserved for future structured-comment posting; currently 0 |
+| `comments_posted` | Number of inline review comments that landed on the PR via the structured-findings flow. Zero when the review was body-only (clean diff, parse failure fallback, or POST fallback) |
 
 `db.claim_pending_pr_review()` uses `FOR UPDATE SKIP LOCKED` on the `pending → running` transition so multiple agent replicas can poll the same queue without stepping on each other.
 
@@ -699,20 +724,20 @@ Comment ID is held in-memory during the run (no DB column); if the agent crashes
 
 **Frontend:**
 - Repo detail page ([app/(dashboard)/repos/[id]/page.tsx](frontend/app/(dashboard)/repos/[id]/page.tsx)) has the "Auto-review PRs" toggle, the "Review agent" dropdown, the webhook re-register button (shows whenever `sync_issues || review_prs` is on), and a **PR reviews** section listing the last 10 reviews with status, author, head SHA, cost, and a link to the PR. Auto-refresh every 3s while any review is `running`, every 15s otherwise.
-- [review-log-modal.tsx](frontend/components/agent/review-log-modal.tsx) — click a review row to see live logs (timestamps, tool calls, assistant text, errors). Polls every 2s while live.
+- [review-log-modal.tsx](frontend/components/agent/review-log-modal.tsx) — click a review row to see live logs (timestamps, tool calls, assistant text, errors). Renders a **Findings** section above the activity log: posted-inline findings (green badge) and skipped findings (amber badge with the `skip_reason`) so reviewers can see what got dropped. Each finding shows a severity badge (red `Sev: High`, amber `Sev: Medium`, sky-blue `Sev: Low`) and the list is sorted high → low so the things that actually need attention show up first. High-severity rows get a brighter container so they stand out even after merge. Polls logs every 2s and findings every 3s while live.
 - Repo card ([repo-card.tsx](frontend/components/agent/repo-card.tsx)) shows a purple `reviews` badge when enabled (amber with `no hook` when the webhook isn't live).
 
 **Cost model — important:** `cost_usd` on `pr_reviews` is the same theoretical-API-equivalent figure that the Claude CLI emits (`total_cost_usd` in the stream JSON). With a subscription, you aren't billed it — but it's a useful proxy for quota burn. To minimize quota impact, set `review_agent_id` to a cheap-model profile (haiku, gpt-5.4-mini) per repo.
 
 **Key files:**
-- [agent/src/reviewer.rs](agent/src/reviewer.rs) — `enqueue_review` (webhook entry), `run_pending_reviews` (poll-loop drain), `process_review_row` (per-row CLI work), system prompt, progress comment + log streaming
+- [agent/src/reviewer.rs](agent/src/reviewer.rs) — `enqueue_review` (webhook entry), `run_pending_reviews` (poll-loop drain), `process_review_row` (per-row CLI work), `parse_findings`, `DiffIndex::parse`, `validate_findings`, `post_structured_review`, system prompt, progress comment + log streaming
 - [agent/src/main.rs](agent/src/main.rs) — Poll loop calls `reviewer::run_pending_reviews` every tick
 - [agent/src/api/mod.rs](agent/src/api/mod.rs) — `handle_pr_review_trigger` (enqueue arm) + bot-comment filter + `trigger_webhook_register` debug endpoint
 - [api/src/routes/webhooks.rs](api/src/routes/webhooks.rs) — `handle_pr_review_trigger` (the production webhook entry — enqueues a `pending` row) + bot-comment filter
 - [agent/src/git/github.rs](agent/src/git/github.rs) — `webhook_urls_equivalent` (forgiving match), `WebhookEnsureResult`
 - [agent/src/onboarding.rs](agent/src/onboarding.rs) — `register_webhook` returns `Result<String, String>` (matched URL or error)
-- [shared/src/db.rs](shared/src/db.rs) — `enqueue_pr_review` (race-safe insert), `claim_pending_pr_review` (FOR UPDATE SKIP LOCKED claim), `complete_pr_review`, `insert_pr_review_log`, `get_pr_review_logs`, `update_repo_review_config`
-- [api/src/routes/repos.rs](api/src/routes/repos.rs) — `list_reviews`, `review_logs`, `trigger_webhook_register`
+- [shared/src/db.rs](shared/src/db.rs) — `enqueue_pr_review` (race-safe insert), `claim_pending_pr_review` (FOR UPDATE SKIP LOCKED claim), `complete_pr_review`, `insert_pr_review_log`, `get_pr_review_logs`, `insert_pr_review_finding`, `get_pr_review_findings`, `update_repo_review_config`
+- [api/src/routes/repos.rs](api/src/routes/repos.rs) — `list_reviews`, `review_logs`, `review_findings`, `trigger_webhook_register`
 
 ## Redis Queue Protocol
 
@@ -742,6 +767,7 @@ cache:agents:list                       # GET /api/agents
 cache:policies:list                     # GET /api/policies
 cache:reviews:repo:{repo_id}            # GET /api/repos/{id}/reviews   (60s TTL)
 cache:reviews:logs:{review_id}          # GET /api/repos/{id}/reviews/{review_id}/logs (5s TTL — live)
+cache:reviews:findings:{review_id}      # GET /api/repos/{id}/reviews/{review_id}/findings (30s TTL)
 cache:config                            # GET /api/config (also busted by repo writes)
 ```
 

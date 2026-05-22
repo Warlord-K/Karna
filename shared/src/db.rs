@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::cache;
-use crate::models::{AgentLog, AgentProfile, AgentTask, Policy, PrReview, PrReviewLog, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment};
+use crate::models::{AgentLog, AgentProfile, AgentTask, Policy, PrReview, PrReviewFinding, PrReviewLog, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment};
 
 #[derive(Clone)]
 pub struct Database {
@@ -1352,6 +1352,59 @@ impl Database {
         )
         .bind(review_id)
         .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Persist a single finding emitted by the reviewer CLI. `posted=false` +
+    /// `skip_reason` records anchors that failed validation against the diff
+    /// (or that GitHub rejected); the UI surfaces both so authors can see what
+    /// was dropped and why. `severity` is one of "high" | "medium" | "low" and
+    /// drives both the GitHub comment-body marker and the UI badge.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_pr_review_finding(
+        &self,
+        review_id: Uuid,
+        path: &str,
+        line: i32,
+        start_line: Option<i32>,
+        side: &str,
+        body: &str,
+        severity: &str,
+        posted: bool,
+        skip_reason: Option<&str>,
+    ) -> Result<PrReviewFinding> {
+        let row = sqlx::query_as::<_, PrReviewFinding>(
+            r#"INSERT INTO pr_review_findings
+                 (review_id, path, line, start_line, side, body, severity, posted, skip_reason)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               RETURNING *"#,
+        )
+        .bind(review_id)
+        .bind(path)
+        .bind(line)
+        .bind(start_line)
+        .bind(side)
+        .bind(body)
+        .bind(severity)
+        .bind(posted)
+        .bind(skip_reason)
+        .fetch_one(&self.pool)
+        .await?;
+        if let Some(r) = &self.redis {
+            cache::invalidate(r, &cache::pr_review_findings_key(review_id)).await;
+        }
+        Ok(row)
+    }
+
+    pub async fn get_pr_review_findings(&self, review_id: Uuid) -> Result<Vec<PrReviewFinding>> {
+        let rows = sqlx::query_as::<_, PrReviewFinding>(
+            r#"SELECT * FROM pr_review_findings
+               WHERE review_id = $1
+               ORDER BY created_at ASC"#,
+        )
+        .bind(review_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)

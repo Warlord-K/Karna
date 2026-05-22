@@ -102,6 +102,10 @@ async fn main() -> anyhow::Result<()> {
             "/repos/{id}/reviews/{review_id}/logs",
             get(routes::repos::review_logs),
         )
+        .route(
+            "/repos/{id}/reviews/{review_id}/findings",
+            get(routes::repos::review_findings),
+        )
         // Users (for assignee dropdown)
         .route("/users", get(routes::users::list))
         // Agent profiles (pseudo-users)

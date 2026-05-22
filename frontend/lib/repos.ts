@@ -88,6 +88,22 @@ export interface PrReviewLog {
   created_at: string | null;
 }
 
+export type PrReviewSeverity = 'high' | 'medium' | 'low';
+
+export interface PrReviewFinding {
+  id: string;
+  review_id: string;
+  path: string;
+  line: number;
+  start_line: number | null;
+  side: 'LEFT' | 'RIGHT';
+  body: string;
+  severity: PrReviewSeverity;
+  posted: boolean;
+  skip_reason: string | null;
+  created_at: string | null;
+}
+
 export async function fetchRepoReviews(repoId: string, signal?: AbortSignal): Promise<PrReview[]> {
   const res = await fetch(`${API_BASE}/${repoId}/reviews`, { signal });
   if (!res.ok) throw new Error('Failed to fetch reviews');
@@ -97,6 +113,12 @@ export async function fetchRepoReviews(repoId: string, signal?: AbortSignal): Pr
 export async function fetchReviewLogs(repoId: string, reviewId: string, signal?: AbortSignal): Promise<PrReviewLog[]> {
   const res = await fetch(`${API_BASE}/${repoId}/reviews/${reviewId}/logs`, { signal });
   if (!res.ok) throw new Error('Failed to fetch review logs');
+  return res.json();
+}
+
+export async function fetchReviewFindings(repoId: string, reviewId: string, signal?: AbortSignal): Promise<PrReviewFinding[]> {
+  const res = await fetch(`${API_BASE}/${repoId}/reviews/${reviewId}/findings`, { signal });
+  if (!res.ok) throw new Error('Failed to fetch review findings');
   return res.json();
 }
 
