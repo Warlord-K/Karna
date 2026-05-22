@@ -89,7 +89,8 @@ karna/
 │   ├── 017_pr_reviews.sql       # pr_reviews + repo_profiles.review_prs / .review_agent_id
 │   ├── 018_policies.sql         # Policies (advisory plan-review guardrails) + agent_tasks.policy_matches
 │   ├── 019_pr_review_logs.sql   # Per-review activity log for live progress streaming
-│   └── 020_pr_review_findings.sql # Per-(path, line) findings for inline review comments
+│   ├── 020_pr_review_findings.sql # Per-(path, line) findings for inline review comments
+│   └── 021_pr_review_finding_severity.sql # Severity tier (high/medium/low) per finding
 ├── Cargo.toml                   # Workspace root (members: agent, api, shared)
 ├── shared/
 │   ├── Cargo.toml
@@ -208,7 +209,7 @@ karna/
   - `review_agent_id` (UUID, nullable) — FK to `agent_profiles.id`; NULL = use config defaults
 - `pr_reviews` — One row per (repo, head_sha) PR review attempt; UNIQUE constraint dedupes concurrent webhook firings; tracks status, reviewer agent, comments_posted, cost_usd
 - `pr_review_logs` — Append-only per-review activity log streamed live from the CLI (tool calls, assistant text, errors). Powers the live progress modal
-- `pr_review_findings` — Per-(path, line) findings emitted by the reviewer CLI. `posted=true` rows became inline review comments via GitHub's Reviews API; `posted=false` rows didn't survive anchor validation (with `skip_reason`). Surfaced in the review-log-modal so reviewers can see both what landed inline and what got dropped
+- `pr_review_findings` — Per-(path, line) findings emitted by the reviewer CLI. `posted=true` rows became inline review comments via GitHub's Reviews API; `posted=false` rows didn't survive anchor validation (with `skip_reason`). Each finding carries `severity` (high/medium/low) which drives both the inline comment-body marker on GitHub and the badge color in the UI. Surfaced in the review-log-modal so reviewers can see both what landed inline and what got dropped
 
 ## Task State Machine
 
@@ -693,6 +694,7 @@ The validator is intentionally strict — GitHub rejects the *entire* review sub
 |---|---|
 | `(path, line, start_line, side)` | Anchor on the PR diff. `side='RIGHT'` is the common case (additions/context on the new file); `side='LEFT'` only for comments on removed lines. `start_line` is set for multi-line ranges; NULL for single-line. |
 | `body` | Markdown body of the inline comment. |
+| `severity` | `high` / `medium` / `low`. `normalize_severity` coerces variants like `"HIGH"`, `"Sev: High"`, `"critical"`, `"nit"` into the canonical set so a forgetful model never trips the CHECK constraint. `severity_marker` prepends a colored emoji + bold label (`🔴 Sev: High`, `🟡 Sev: Medium`, `🔵 Sev: Low`) to the body when posting to GitHub so the tier shows on github.com without depending on the karna UI. |
 | `posted` | Whether the finding made it onto GitHub. `false` = dropped during validation or by GitHub. |
 | `skip_reason` | When `posted=false`, why (e.g. `"line 412 not in diff"`, `"empty body or path"`). NULL when posted. |
 
@@ -722,7 +724,7 @@ Comment ID is held in-memory during the run (no DB column); if the agent crashes
 
 **Frontend:**
 - Repo detail page ([app/(dashboard)/repos/[id]/page.tsx](frontend/app/(dashboard)/repos/[id]/page.tsx)) has the "Auto-review PRs" toggle, the "Review agent" dropdown, the webhook re-register button (shows whenever `sync_issues || review_prs` is on), and a **PR reviews** section listing the last 10 reviews with status, author, head SHA, cost, and a link to the PR. Auto-refresh every 3s while any review is `running`, every 15s otherwise.
-- [review-log-modal.tsx](frontend/components/agent/review-log-modal.tsx) — click a review row to see live logs (timestamps, tool calls, assistant text, errors). Renders a **Findings** section above the activity log: posted-inline findings (green badge) and skipped findings (amber badge with the `skip_reason`) so reviewers can see what got dropped. Polls logs every 2s and findings every 3s while live.
+- [review-log-modal.tsx](frontend/components/agent/review-log-modal.tsx) — click a review row to see live logs (timestamps, tool calls, assistant text, errors). Renders a **Findings** section above the activity log: posted-inline findings (green badge) and skipped findings (amber badge with the `skip_reason`) so reviewers can see what got dropped. Each finding shows a severity badge (red `Sev: High`, amber `Sev: Medium`, sky-blue `Sev: Low`) and the list is sorted high → low so the things that actually need attention show up first. High-severity rows get a brighter container so they stand out even after merge. Polls logs every 2s and findings every 3s while live.
 - Repo card ([repo-card.tsx](frontend/components/agent/repo-card.tsx)) shows a purple `reviews` badge when enabled (amber with `no hook` when the webhook isn't live).
 
 **Cost model — important:** `cost_usd` on `pr_reviews` is the same theoretical-API-equivalent figure that the Claude CLI emits (`total_cost_usd` in the stream JSON). With a subscription, you aren't billed it — but it's a useful proxy for quota burn. To minimize quota impact, set `review_agent_id` to a cheap-model profile (haiku, gpt-5.4-mini) per repo.

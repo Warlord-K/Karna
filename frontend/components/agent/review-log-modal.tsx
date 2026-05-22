@@ -29,8 +29,14 @@ export function ReviewLogModal({ repoId, review, onClose }: ReviewLogModalProps)
     refetchInterval: isLive ? 3000 : false,
   });
 
-  const postedFindings = findings.filter((f) => f.posted);
-  const skippedFindings = findings.filter((f) => !f.posted);
+  // Surface high-severity findings first so reviewers see what actually
+  // matters at a glance — within a tier we preserve the agent's emission
+  // order so related findings stay grouped.
+  const sevWeight: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  const bySeverity = (a: PrReviewFinding, b: PrReviewFinding) =>
+    (sevWeight[a.severity] ?? 1) - (sevWeight[b.severity] ?? 1);
+  const postedFindings = findings.filter((f) => f.posted).sort(bySeverity);
+  const skippedFindings = findings.filter((f) => !f.posted).sort(bySeverity);
 
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -149,25 +155,45 @@ function Meta({ label, value, mono }: { label: string; value: string; mono?: boo
   );
 }
 
+const SEVERITY_BADGE: Record<string, { label: string; cls: string }> = {
+  high: {
+    label: 'Sev: High',
+    cls: 'bg-red-500/15 text-red-300 border-red-500/40',
+  },
+  medium: {
+    label: 'Sev: Medium',
+    cls: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  },
+  low: {
+    label: 'Sev: Low',
+    cls: 'bg-sky-500/15 text-sky-300 border-sky-500/40',
+  },
+};
+
 function FindingRow({ finding, pr }: { finding: PrReviewFinding; pr: PrReview }) {
   const isPosted = finding.posted;
   const range = finding.start_line && finding.start_line !== finding.line
     ? `${finding.start_line}-${finding.line}`
     : `${finding.line}`;
-  // Link to the file in the PR diff. Format: <pr_url>/files#diff-<sha>R<line>
-  // but GitHub also accepts <pr_url>/files (no anchor) — that's the safe
-  // common-denominator since computing the diff anchor hash would require the
-  // file SHA. The inline comment itself is the canonical permalink.
+  // Link to the file in the PR diff. We use <pr_url>/files (no line anchor)
+  // because the precise diff-anchor hash needs the file SHA, which we don't
+  // have client-side. The inline comment posted on GitHub is the canonical
+  // permalink anyway.
   const filesUrl = pr.pr_url ? `${pr.pr_url}/files` : undefined;
+  const sev = SEVERITY_BADGE[finding.severity] ?? SEVERITY_BADGE.medium;
+  // High-severity rows get a brighter container so they stand out even when
+  // posted (otherwise everything looks equally weighted in the modal).
+  const containerCls = !isPosted
+    ? 'border-amber-500/30 bg-amber-500/5'
+    : finding.severity === 'high'
+      ? 'border-red-500/30 bg-red-500/5'
+      : 'border-gray-3 bg-gray-2/40';
   return (
-    <div
-      className={`rounded-md border px-3 py-2 ${
-        isPosted
-          ? 'border-gray-3 bg-gray-2/40'
-          : 'border-amber-500/30 bg-amber-500/5'
-      }`}
-    >
-      <div className="flex items-center gap-2 text-[11px] mb-1">
+    <div className={`rounded-md border px-3 py-2 ${containerCls}`}>
+      <div className="flex items-center gap-2 text-[11px] mb-1 flex-wrap">
+        <span className={`inline-flex items-center px-1.5 h-4 rounded text-[9px] uppercase tracking-wider border ${sev.cls}`}>
+          {sev.label}
+        </span>
         {isPosted ? (
           <span className="inline-flex items-center gap-1 px-1.5 h-4 rounded text-[9px] uppercase tracking-wider bg-green-500/15 text-green-400 border border-green-500/30">
             <ArrowBendUpRight size={10} weight="bold" /> Posted inline

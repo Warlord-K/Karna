@@ -1360,7 +1360,8 @@ impl Database {
     /// Persist a single finding emitted by the reviewer CLI. `posted=false` +
     /// `skip_reason` records anchors that failed validation against the diff
     /// (or that GitHub rejected); the UI surfaces both so authors can see what
-    /// was dropped and why.
+    /// was dropped and why. `severity` is one of "high" | "medium" | "low" and
+    /// drives both the GitHub comment-body marker and the UI badge.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_pr_review_finding(
         &self,
@@ -1370,13 +1371,14 @@ impl Database {
         start_line: Option<i32>,
         side: &str,
         body: &str,
+        severity: &str,
         posted: bool,
         skip_reason: Option<&str>,
     ) -> Result<PrReviewFinding> {
         let row = sqlx::query_as::<_, PrReviewFinding>(
             r#"INSERT INTO pr_review_findings
-                 (review_id, path, line, start_line, side, body, posted, skip_reason)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 (review_id, path, line, start_line, side, body, severity, posted, skip_reason)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                RETURNING *"#,
         )
         .bind(review_id)
@@ -1385,6 +1387,7 @@ impl Database {
         .bind(start_line)
         .bind(side)
         .bind(body)
+        .bind(severity)
         .bind(posted)
         .bind(skip_reason)
         .fetch_one(&self.pool)

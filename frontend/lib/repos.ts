@@ -88,6 +88,8 @@ export interface PrReviewLog {
   created_at: string | null;
 }
 
+export type PrReviewSeverity = 'high' | 'medium' | 'low';
+
 export interface PrReviewFinding {
   id: string;
   review_id: string;
@@ -96,6 +98,7 @@ export interface PrReviewFinding {
   start_line: number | null;
   side: 'LEFT' | 'RIGHT';
   body: string;
+  severity: PrReviewSeverity;
   posted: boolean;
   skip_reason: string | null;
   created_at: string | null;

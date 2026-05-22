@@ -375,5 +375,6 @@ pub struct PrReviewFinding {
     pub body: String,
     pub posted: bool,
     pub skip_reason: Option<String>,
+    pub severity: String,
     pub created_at: Option<DateTime<Utc>>,
 }

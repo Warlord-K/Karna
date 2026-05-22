@@ -74,6 +74,7 @@ review body. If clean, say so here in one sentence.>\",\n\
         \"path\": \"src/foo.py\",\n\
         \"line\": 42,\n\
         \"side\": \"RIGHT\",\n\
+        \"severity\": \"high\",\n\
         \"body\": \"<markdown explaining the issue at this specific line>\"\n\
       },\n\
       {\n\
@@ -81,11 +82,25 @@ review body. If clean, say so here in one sentence.>\",\n\
         \"start_line\": 100,\n\
         \"line\": 105,\n\
         \"side\": \"RIGHT\",\n\
+        \"severity\": \"medium\",\n\
         \"body\": \"<markdown for a multi-line comment spanning lines 100-105>\"\n\
       }\n\
     ]\n\
   }\n\
   findings -->\n\n\
+SEVERITY (REQUIRED — pick one per finding):\n\
+- \"high\": correctness bugs the common path hits (data loss, security \
+  vulnerabilities, broken auth/access checks, panics on normal input, \
+  obvious regressions). Reviewer should block the merge on these.\n\
+- \"medium\": real bugs on edge cases or under specific conditions \
+  (race conditions, missing error handling at system boundaries, off-by-one \
+  on uncommon inputs, partial-failure modes). Worth fixing before merge \
+  but not a hard blocker.\n\
+- \"low\": minor concerns the author may want to revisit — defensive \
+  improvements, subtle invariants worth documenting, things that aren't \
+  wrong today but could bite later. Author's call to fix or defer.\n\
+If a finding doesn't clearly clear the bar for at least \"low\", drop it \
+entirely. Don't pad the review with noise.\n\n\
 ANCHOR RULES:\n\
 - `line` is the line number in the NEW version of the file (post-change).\n\
 - Use `side: \"RIGHT\"` for comments on additions or surrounding context \
@@ -435,6 +450,7 @@ async fn run_review(
     // Persist every finding — both posted-eligible and skipped — so the UI can
     // surface what got dropped and why.
     for fc in &valid_comments {
+        let sev = normalize_severity(&fc.severity);
         if let Err(e) = db
             .insert_pr_review_finding(
                 review.id,
@@ -443,6 +459,7 @@ async fn run_review(
                 fc.start_line,
                 &fc.side,
                 &fc.body,
+                sev,
                 true,
                 None,
             )
@@ -452,6 +469,7 @@ async fn run_review(
         }
     }
     for (fc, reason) in &skipped {
+        let sev = normalize_severity(&fc.severity);
         if let Err(e) = db
             .insert_pr_review_finding(
                 review.id,
@@ -460,6 +478,7 @@ async fn run_review(
                 fc.start_line,
                 &fc.side,
                 &fc.body,
+                sev,
                 false,
                 Some(reason),
             )
@@ -496,8 +515,10 @@ async fn run_review(
     if !skipped.is_empty() {
         body.push_str("\n\n---\n_The reviewer flagged additional findings that couldn't be anchored to the diff:_\n\n");
         for (fc, reason) in &skipped {
+            let sev = normalize_severity(&fc.severity);
             body.push_str(&format!(
-                "- `{}:{}` ({}): {}\n",
+                "- {} `{}:{}` ({}): {}\n",
+                severity_marker(sev),
                 fc.path,
                 fc.line,
                 reason,
@@ -617,11 +638,43 @@ struct FindingComment {
     start_line: Option<i32>,
     #[serde(default = "default_side")]
     side: String,
+    #[serde(default = "default_severity")]
+    severity: String,
     body: String,
 }
 
 fn default_side() -> String {
     "RIGHT".to_string()
+}
+
+/// Findings without an explicit severity fall through to medium so legacy
+/// reviewers (or a forgetful model) still produce something the UI can render.
+fn default_severity() -> String {
+    "medium".to_string()
+}
+
+/// Canonicalize to "high" | "medium" | "low" so a model that emits
+/// "HIGH", "Sev: High", or "critical" doesn't trip the CHECK constraint.
+fn normalize_severity(raw: &str) -> &'static str {
+    let lowered = raw.trim().to_ascii_lowercase();
+    if lowered.contains("high") || lowered.contains("critical") || lowered.contains("sev1") {
+        "high"
+    } else if lowered.contains("low") || lowered.contains("minor") || lowered.contains("nit") {
+        "low"
+    } else {
+        "medium"
+    }
+}
+
+/// Prepended to the inline-comment body so the severity is visible on GitHub
+/// itself, not just in the karna UI. Emoji + bold lets it scan at a glance
+/// without depending on markdown rendering quirks.
+fn severity_marker(severity: &str) -> &'static str {
+    match severity {
+        "high" => "🔴 **Sev: High**",
+        "low" => "🔵 **Sev: Low**",
+        _ => "🟡 **Sev: Medium**",
+    }
 }
 
 fn parse_findings(output: &str) -> Result<ParsedFindings> {
@@ -851,11 +904,16 @@ async fn post_structured_review(
 
 fn comment_payload(c: &FindingComment) -> Value {
     let side = if c.side.eq_ignore_ascii_case("LEFT") { "LEFT" } else { "RIGHT" };
+    let sev = normalize_severity(&c.severity);
+    // Prepend the severity marker so the inline comment on GitHub itself
+    // shows the tier — without it, reviewers would only see the badge in the
+    // karna modal and miss it when reading the PR on github.com.
+    let body = format!("{}\n\n{}", severity_marker(sev), c.body);
     let mut obj = json!({
         "path": c.path,
         "line": c.line,
         "side": side,
-        "body": c.body,
+        "body": body,
     });
     if let Some(start) = c.start_line {
         if start != c.line {
@@ -951,11 +1009,46 @@ mod tests {
 
     #[test]
     fn parse_findings_with_inline_comments() {
-        let output = "<!-- findings\n{\n  \"summary\": \"Two issues\",\n  \"comments\": [\n    {\"path\": \"src/foo.rs\", \"line\": 10, \"side\": \"RIGHT\", \"body\": \"bug here\"},\n    {\"path\": \"src/bar.rs\", \"start_line\": 5, \"line\": 8, \"side\": \"RIGHT\", \"body\": \"multi line\"}\n  ]\n}\nfindings -->";
+        let output = "<!-- findings\n{\n  \"summary\": \"Two issues\",\n  \"comments\": [\n    {\"path\": \"src/foo.rs\", \"line\": 10, \"side\": \"RIGHT\", \"severity\": \"high\", \"body\": \"bug here\"},\n    {\"path\": \"src/bar.rs\", \"start_line\": 5, \"line\": 8, \"side\": \"RIGHT\", \"body\": \"multi line, no severity\"}\n  ]\n}\nfindings -->";
         let p = parse_findings(output).unwrap();
         assert_eq!(p.comments.len(), 2);
         assert_eq!(p.comments[0].path, "src/foo.rs");
+        assert_eq!(p.comments[0].severity, "high");
         assert_eq!(p.comments[1].start_line, Some(5));
+        // Missing severity falls through to medium via default_severity()
+        assert_eq!(p.comments[1].severity, "medium");
+    }
+
+    #[test]
+    fn normalize_severity_handles_variants() {
+        assert_eq!(normalize_severity("high"), "high");
+        assert_eq!(normalize_severity("HIGH"), "high");
+        assert_eq!(normalize_severity("Sev: High"), "high");
+        assert_eq!(normalize_severity("critical"), "high");
+        assert_eq!(normalize_severity("low"), "low");
+        assert_eq!(normalize_severity("nit"), "low");
+        assert_eq!(normalize_severity("minor"), "low");
+        assert_eq!(normalize_severity(""), "medium");
+        assert_eq!(normalize_severity("medium"), "medium");
+        // Unrecognized values fall through to medium so the CHECK constraint
+        // never blocks a finding from being persisted.
+        assert_eq!(normalize_severity("p2"), "medium");
+    }
+
+    #[test]
+    fn comment_payload_prepends_severity_marker() {
+        let c = FindingComment {
+            path: "src/foo.rs".into(),
+            line: 10,
+            start_line: None,
+            side: "RIGHT".into(),
+            severity: "high".into(),
+            body: "real issue".into(),
+        };
+        let p = comment_payload(&c);
+        let body = p.get("body").unwrap().as_str().unwrap();
+        assert!(body.starts_with("🔴 **Sev: High**"));
+        assert!(body.contains("real issue"));
     }
 
     #[test]
@@ -998,6 +1091,7 @@ mod tests {
                 line: 2,
                 start_line: None,
                 side: "RIGHT".into(),
+                severity: "high".into(),
                 body: "real".into(),
             },
             FindingComment {
@@ -1005,6 +1099,7 @@ mod tests {
                 line: 999,
                 start_line: None,
                 side: "RIGHT".into(),
+                severity: "medium".into(),
                 body: "hallucinated".into(),
             },
             FindingComment {
@@ -1012,6 +1107,7 @@ mod tests {
                 line: 1,
                 start_line: None,
                 side: "RIGHT".into(),
+                severity: "low".into(),
                 body: "wrong file".into(),
             },
         ];
