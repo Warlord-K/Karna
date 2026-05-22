@@ -133,3 +133,7 @@ pub fn pr_reviews_for_repo_key(repo_id: Uuid) -> String {
 pub fn pr_review_logs_key(review_id: Uuid) -> String {
     format!("cache:reviews:logs:{review_id}")
 }
+
+pub fn pr_review_findings_key(review_id: Uuid) -> String {
+    format!("cache:reviews:findings:{review_id}")
+}

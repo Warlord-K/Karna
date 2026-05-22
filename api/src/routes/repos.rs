@@ -182,6 +182,26 @@ pub async fn review_logs(
     Ok(Json(logs))
 }
 
+pub async fn review_findings(
+    State(state): State<AppState>,
+    Extension(_user): Extension<UserId>,
+    Path((_repo_id, review_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Vec<karna_shared::models::PrReviewFinding>>, StatusCode> {
+    if state.db.get_pr_review(review_id).await.ok().flatten().is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let db = state.db.clone();
+    let cache_key = cache::pr_review_findings_key(review_id);
+    // Cap TTL low while the review is live; findings settle once the review
+    // terminates so 30s is fine.
+    let findings = cache::get_or_set(&state.redis, &cache_key, 30, move || async move {
+        db.get_pr_review_findings(review_id).await
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(findings))
+}
+
 pub async fn trigger_onboard(
     State(state): State<AppState>,
     Extension(_user): Extension<UserId>,

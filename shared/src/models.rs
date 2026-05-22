@@ -363,3 +363,17 @@ pub struct PrReview {
     pub created_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
 }
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct PrReviewFinding {
+    pub id: Uuid,
+    pub review_id: Uuid,
+    pub path: String,
+    pub line: i32,
+    pub start_line: Option<i32>,
+    pub side: String,
+    pub body: String,
+    pub posted: bool,
+    pub skip_reason: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+}
