@@ -1210,10 +1210,14 @@ impl Database {
         Ok(row)
     }
 
-    /// Insert a `running` review row. Returns `None` if a row for (repo, head_sha)
-    /// already exists — race-safe via the UNIQUE constraint — so the caller can
-    /// skip cleanly when two webhook firings overlap.
-    pub async fn start_pr_review(
+    /// Insert a `pending` review row that the agent poll loop will claim and run.
+    /// Returns `None` if a row for (repo, head_sha) already exists — race-safe via
+    /// the UNIQUE constraint — so concurrent webhook firings on the same commit
+    /// dedupe cleanly.
+    ///
+    /// Webhooks call this from any process (api or agent); only the agent's poll
+    /// loop transitions the row out of `pending` via `claim_pending_pr_review`.
+    pub async fn enqueue_pr_review(
         &self,
         repo: &str,
         pr_number: i32,
@@ -1225,7 +1229,7 @@ impl Database {
         let row = sqlx::query_as::<_, PrReview>(
             r#"INSERT INTO pr_reviews
                  (repo, pr_number, pr_url, head_sha, author, reviewer_agent_id, status)
-               VALUES ($1, $2, $3, $4, $5, $6, 'running')
+               VALUES ($1, $2, $3, $4, $5, $6, 'pending')
                ON CONFLICT (repo, head_sha) DO NOTHING
                RETURNING *"#,
         )
@@ -1235,6 +1239,27 @@ impl Database {
         .bind(head_sha)
         .bind(author)
         .bind(reviewer_agent_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Atomically claim the oldest `pending` PR review for execution.
+    /// Uses `FOR UPDATE SKIP LOCKED` so two agent replicas can both poll without
+    /// stepping on each other — each one gets a different row (or None).
+    pub async fn claim_pending_pr_review(&self) -> Result<Option<PrReview>> {
+        let row = sqlx::query_as::<_, PrReview>(
+            r#"UPDATE pr_reviews
+               SET status = 'running'
+               WHERE id = (
+                   SELECT id FROM pr_reviews
+                   WHERE status = 'pending'
+                   ORDER BY created_at ASC
+                   LIMIT 1
+                   FOR UPDATE SKIP LOCKED
+               )
+               RETURNING *"#,
+        )
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)

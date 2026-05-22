@@ -404,16 +404,17 @@ async fn github_webhook(
 }
 
 /// PR opened / synchronized / reopened on a non-agent branch → if the repo
-/// has `review_prs = TRUE`, run a read-only review. Drafts are skipped.
-/// Concurrent triggers on the same `head_sha` dedupe via the UNIQUE index on
-/// `pr_reviews`. The actual review runs in a tokio task so the webhook
-/// returns immediately.
+/// has `review_prs = TRUE`, enqueue an auto-review. The agent's poll loop
+/// claims the `pending` row and runs the actual CLI review. Drafts are skipped.
+/// Concurrent firings on the same `head_sha` dedupe via the UNIQUE index on
+/// `pr_reviews`. Duplicates the karna-api `/webhooks/github` flow so local
+/// docker-compose (where the agent's own port is exposed) behaves the same as
+/// cloud deploys (where karna-api receives the webhook).
 async fn handle_pr_review_trigger(
     state: &AppState,
     payload: &serde_json::Value,
     branch: &str,
 ) -> StatusCode {
-    // Skip drafts — let the author finish before we review.
     if payload
         .pointer("/pull_request/draft")
         .and_then(|v| v.as_bool())
@@ -424,7 +425,7 @@ async fn handle_pr_review_trigger(
     }
 
     let repo = match payload.pointer("/repository/full_name").and_then(|v| v.as_str()) {
-        Some(r) => r.to_string(),
+        Some(r) => r,
         None => return StatusCode::OK,
     };
     let pr_number = match payload.pointer("/pull_request/number").and_then(|v| v.as_i64()) {
@@ -433,53 +434,30 @@ async fn handle_pr_review_trigger(
     };
     let pr_url = payload
         .pointer("/pull_request/html_url")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .and_then(|v| v.as_str());
     let head_sha = match payload.pointer("/pull_request/head/sha").and_then(|v| v.as_str()) {
-        Some(s) => s.to_string(),
+        Some(s) => s,
         None => return StatusCode::OK,
     };
     let author = payload
         .pointer("/pull_request/user/login")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let branch = branch.to_string();
+        .and_then(|v| v.as_str());
 
-    // Bail early without spinning up a task if the per-repo flag is off.
-    // (The reviewer re-checks this — this is just to avoid the tokio spawn.)
-    match state.db.get_repo_profile(&repo).await {
-        Ok(Some(p)) if !p.review_prs => {
-            info!(repo = %repo, pr = pr_number, "PR review disabled for repo, skipping");
-            return StatusCode::OK;
-        }
-        Ok(None) => {
-            info!(repo = %repo, pr = pr_number, "No profile for repo, skipping PR review");
-            return StatusCode::OK;
-        }
+    let req = crate::reviewer::ReviewRequest {
+        repo,
+        pr_number,
+        pr_url,
+        head_sha,
+        author,
+    };
+    match crate::reviewer::enqueue_review(&state.db, req).await {
+        Ok(crate::reviewer::EnqueueOutcome::Enqueued) => StatusCode::ACCEPTED,
+        Ok(_) => StatusCode::OK,
         Err(e) => {
-            warn!(error = %e, "Failed to look up repo profile for PR review");
-            return StatusCode::INTERNAL_SERVER_ERROR;
+            warn!(error = %e, repo, pr = pr_number, "Failed to enqueue PR review");
+            StatusCode::INTERNAL_SERVER_ERROR
         }
-        Ok(Some(_)) => {}
     }
-
-    let config = state.config.clone();
-    let db = state.db.clone();
-    tokio::spawn(async move {
-        let req = crate::reviewer::ReviewRequest {
-            repo: &repo,
-            pr_number,
-            pr_url: pr_url.as_deref(),
-            head_sha: &head_sha,
-            author: author.as_deref(),
-            branch: &branch,
-        };
-        if let Err(e) = crate::reviewer::maybe_review_pr(config, db, req).await {
-            warn!(error = %e, repo = %repo, pr = pr_number, "PR review failed");
-        }
-    });
-
-    StatusCode::ACCEPTED
 }
 
 async fn handle_issue_opened(state: &AppState, payload: &serde_json::Value) -> StatusCode {

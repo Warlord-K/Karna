@@ -227,6 +227,12 @@ async fn main() -> anyhow::Result<()> {
                 Err(e) => error!("Webhook reconcile error: {e:#}"),
             }
 
+            // Drain pending PR reviews (enqueued by either webhook server)
+            match reviewer::run_pending_reviews(&config, &db).await {
+                Ok(()) => {}
+                Err(e) => error!("PR review drain error: {e:#}"),
+            }
+
             // Check and run due schedules
             match scheduler::check_schedules(&config, &db, &redis).await {
                 Ok(()) => {}

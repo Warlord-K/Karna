@@ -44,16 +44,39 @@ pub async fn github_webhook(
         return handle_issue_opened(&state, &payload).await;
     }
 
+    // Top-level bot filter — drop comments/reviews authored by bots
+    // (Vercel preview deploys, GitHub Actions, dependabot, renovate, Karna's
+    // own progress-comment edits). Mirrors the agent's webhook filter.
+    if event == "issue_comment" || event == "pull_request_review_comment" {
+        let kind = payload.pointer("/comment/user/type").and_then(|v| v.as_str()).unwrap_or("");
+        if kind == "Bot" {
+            let login = payload.pointer("/comment/user/login").and_then(|v| v.as_str()).unwrap_or("");
+            info!(event, bot = login, "Webhook: ignoring bot comment");
+            return StatusCode::OK;
+        }
+    }
+    if event == "pull_request_review" {
+        let kind = payload.pointer("/review/user/type").and_then(|v| v.as_str()).unwrap_or("");
+        if kind == "Bot" {
+            let login = payload.pointer("/review/user/login").and_then(|v| v.as_str()).unwrap_or("");
+            info!(event, bot = login, "Webhook: ignoring bot review");
+            return StatusCode::OK;
+        }
+    }
+
     let branch = payload
         .pointer("/pull_request/head/ref")
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    // Only handle agent branches ({prefix}-{number}/slug format)
-    // Skip branches that don't match the pattern (e.g., "main", "feature/foo")
-    if !branch.contains('/') || !branch.split('/').next().is_some_and(|p| {
+    let is_agent_branch = branch.contains('/') && branch.split('/').next().is_some_and(|p| {
         p.rfind('-').is_some_and(|i| p[i + 1..].chars().all(|c| c.is_ascii_digit()) && i > 0)
-    }) {
+    });
+    if !is_agent_branch {
+        // Human-opened PR → enqueue an auto-review if the repo opted in.
+        if event == "pull_request" && matches!(action, "opened" | "reopened" | "synchronize") {
+            return handle_pr_review_trigger(&state, &payload).await;
+        }
         return StatusCode::OK;
     }
 
@@ -148,6 +171,92 @@ pub async fn github_webhook(
     }
 
     StatusCode::OK
+}
+
+/// Enqueue an auto-review for a human-opened PR. The agent's poll loop claims
+/// `pending` rows and runs the actual CLI-driven review (`agent/src/reviewer.rs`).
+/// Decoupling the webhook from execution means cloud deploys (where the api
+/// receives webhooks via ALB) and local docker-compose (where the agent's own
+/// port is exposed) behave identically.
+async fn handle_pr_review_trigger(
+    state: &AppState,
+    payload: &serde_json::Value,
+) -> StatusCode {
+    if payload
+        .pointer("/pull_request/draft")
+        .and_then(|v| v.as_bool())
+        == Some(true)
+    {
+        info!("Webhook: skipping PR review for draft");
+        return StatusCode::OK;
+    }
+
+    let repo = match payload.pointer("/repository/full_name").and_then(|v| v.as_str()) {
+        Some(r) => r.to_string(),
+        None => return StatusCode::OK,
+    };
+    let pr_number = match payload.pointer("/pull_request/number").and_then(|v| v.as_i64()) {
+        Some(n) => n as i32,
+        None => return StatusCode::OK,
+    };
+    let pr_url = payload
+        .pointer("/pull_request/html_url")
+        .and_then(|v| v.as_str());
+    let head_sha = match payload.pointer("/pull_request/head/sha").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return StatusCode::OK,
+    };
+    let author = payload
+        .pointer("/pull_request/user/login")
+        .and_then(|v| v.as_str());
+
+    let profile = match state.db.get_repo_profile(&repo).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            info!(repo = %repo, pr = pr_number, "No profile for repo, skipping PR review");
+            return StatusCode::OK;
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to look up repo profile for PR review");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+    if !profile.review_prs {
+        info!(repo = %repo, pr = pr_number, "PR review disabled for repo, skipping");
+        return StatusCode::OK;
+    }
+
+    match state
+        .db
+        .enqueue_pr_review(
+            &repo,
+            pr_number,
+            pr_url,
+            head_sha,
+            author,
+            profile.review_agent_id,
+        )
+        .await
+    {
+        Ok(Some(row)) => {
+            info!(
+                repo = %repo,
+                pr = pr_number,
+                head_sha,
+                review_id = %row.id,
+                "Enqueued PR review"
+            );
+            StatusCode::ACCEPTED
+        }
+        Ok(None) => {
+            info!(repo = %repo, pr = pr_number, head_sha, "PR review already exists for commit");
+            StatusCode::OK
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to enqueue PR review");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
 }
 
 async fn handle_issue_opened(state: &AppState, payload: &serde_json::Value) -> StatusCode {

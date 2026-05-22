@@ -16,6 +16,7 @@
 //!   5. Edit (or delete) the progress comment to reflect outcome.
 
 use anyhow::{Context, Result};
+use karna_shared::models::PrReview;
 use serde_json::json;
 use tokio::process::Command;
 use tracing::{info, warn};
@@ -64,27 +65,94 @@ pub struct ReviewRequest<'a> {
     pub pr_url: Option<&'a str>,
     pub head_sha: &'a str,
     pub author: Option<&'a str>,
-    pub branch: &'a str,
 }
 
-/// Entry point — call from a tokio task spawned off the webhook handler.
-/// Returns Ok(()) on every outcome (success, skip, even failure) — we record
-/// the result on the `pr_reviews` row, so the caller doesn't need to act on it.
-pub async fn maybe_review_pr(config: Config, db: Database, req: ReviewRequest<'_>) -> Result<()> {
+/// Webhook entry point — does the cheap checks (repo profile, review_prs flag,
+/// dedupe) and inserts a `pending` row that the agent's poll loop will pick up.
+///
+/// Called from both the api webhook handler (`/webhooks/github` on karna-api)
+/// and the agent webhook handler (`/webhooks/github` on the agent's own port).
+/// Both paths converge on the same `pr_reviews` queue, so cloud and local-dev
+/// deployments behave identically.
+pub async fn enqueue_review(db: &Database, req: ReviewRequest<'_>) -> Result<EnqueueOutcome> {
     let profile = db
         .get_repo_profile(req.repo)
         .await
         .context("Failed to look up repo profile")?;
     let Some(profile) = profile else {
         info!(repo = req.repo, "No repo profile, skipping PR review");
-        return Ok(());
+        return Ok(EnqueueOutcome::SkippedNoProfile);
     };
     if !profile.review_prs {
         info!(repo = req.repo, "PR review disabled for repo, skipping");
-        return Ok(());
+        return Ok(EnqueueOutcome::SkippedDisabled);
     }
 
-    let agent_profile = if let Some(id) = profile.review_agent_id {
+    let row = db
+        .enqueue_pr_review(
+            req.repo,
+            req.pr_number,
+            req.pr_url,
+            req.head_sha,
+            req.author,
+            profile.review_agent_id,
+        )
+        .await
+        .context("Failed to enqueue pr_review row")?;
+
+    let Some(review) = row else {
+        info!(
+            repo = req.repo,
+            pr = req.pr_number,
+            head_sha = req.head_sha,
+            "PR review already exists for this commit, skipping"
+        );
+        return Ok(EnqueueOutcome::Deduped);
+    };
+    info!(
+        repo = req.repo,
+        pr = req.pr_number,
+        head_sha = req.head_sha,
+        review_id = %review.id,
+        "Enqueued PR review"
+    );
+    Ok(EnqueueOutcome::Enqueued)
+}
+
+#[derive(Debug)]
+pub enum EnqueueOutcome {
+    Enqueued,
+    Deduped,
+    SkippedDisabled,
+    SkippedNoProfile,
+}
+
+/// Poll-loop tick — claim every `pending` PR review and process it.
+/// Runs sequentially within one agent process; the DB `FOR UPDATE SKIP LOCKED`
+/// in `claim_pending_pr_review` makes it safe for multiple replicas to compete.
+pub async fn run_pending_reviews(config: &Config, db: &Database) -> Result<()> {
+    loop {
+        let Some(row) = db
+            .claim_pending_pr_review()
+            .await
+            .context("Failed to claim pending PR review")?
+        else {
+            return Ok(());
+        };
+        info!(
+            review_id = %row.id,
+            repo = %row.repo,
+            pr = row.pr_number,
+            "Picked up pending PR review"
+        );
+        if let Err(e) = process_review_row(config, db, &row).await {
+            warn!(error = %e, repo = %row.repo, pr = row.pr_number, "PR review failed");
+        }
+    }
+}
+
+async fn process_review_row(config: &Config, db: &Database, review: &PrReview) -> Result<()> {
+    let agent_profile = if let Some(id) = review.reviewer_agent_id {
         db.get_agent_profile(id).await.ok().flatten()
     } else {
         None
@@ -99,30 +167,6 @@ pub async fn maybe_review_pr(config: Config, db: Database, req: ReviewRequest<'_
         }
     };
 
-    // Race-safe insert. If two webhook firings collide on the same head_sha,
-    // only one wins; the other returns None and exits cleanly.
-    let review_row = db
-        .start_pr_review(
-            req.repo,
-            req.pr_number,
-            req.pr_url,
-            req.head_sha,
-            req.author,
-            agent_profile.as_ref().map(|p| p.id),
-        )
-        .await
-        .context("Failed to create pr_review row")?;
-
-    let Some(review) = review_row else {
-        info!(
-            repo = req.repo,
-            pr = req.pr_number,
-            head_sha = req.head_sha,
-            "PR review already in progress or completed for this commit, skipping"
-        );
-        return Ok(());
-    };
-
     // Post the "in progress" comment so the author sees instant feedback.
     // Best-effort — a failure here doesn't stop the review.
     let agent_label = agent_profile
@@ -133,14 +177,14 @@ pub async fn maybe_review_pr(config: Config, db: Database, req: ReviewRequest<'_
         "🤖 **Karna review in progress**\n\n\
          {agent_label} is reviewing this PR. The final review will appear as a separate comment below.\n\n\
          <sub>This comment will be updated when the review finishes. Sourced from <code>{head_sha}</code>.</sub>",
-        head_sha = &req.head_sha[..req.head_sha.len().min(8)],
+        head_sha = &review.head_sha[..review.head_sha.len().min(8)],
     );
-    let progress_comment_id = match post_pr_comment(req.repo, req.pr_number, &progress_body).await {
+    let progress_comment_id = match post_pr_comment(&review.repo, review.pr_number, &progress_body).await {
         Ok(id) => {
             let _ = db.insert_pr_review_log(
                 review.id,
                 "review",
-                &format!("Posted progress comment #{id} on {}#{}", req.repo, req.pr_number),
+                &format!("Posted progress comment #{id} on {}#{}", review.repo, review.pr_number),
                 "info",
                 None,
             ).await;
@@ -167,20 +211,19 @@ pub async fn maybe_review_pr(config: Config, db: Database, req: ReviewRequest<'_
         None,
     ).await;
 
-    let outcome = run_review(&config, &db, review.id, &cli_name, &model, addendum.as_deref(), &req).await;
+    let outcome = run_review(config, db, review, &cli_name, &model, addendum.as_deref()).await;
 
     let (status, cost_usd, error) = match &outcome {
         Ok(cost) => ("completed", *cost, None),
         Err(e) => ("failed", 0.0, Some(format!("{e:#}"))),
     };
 
-    // Update or remove the progress comment to reflect outcome.
     if let Some(comment_id) = progress_comment_id {
         let final_body = match &outcome {
             Ok(_) => format!(
                 "🤖 **Karna review complete** — see the review below.\n\n\
                  <sub>Reviewed by {agent_label} on commit <code>{head_sha}</code>.</sub>",
-                head_sha = &req.head_sha[..req.head_sha.len().min(8)],
+                head_sha = &review.head_sha[..review.head_sha.len().min(8)],
             ),
             Err(e) => {
                 let msg = format!("{e:#}");
@@ -189,11 +232,11 @@ pub async fn maybe_review_pr(config: Config, db: Database, req: ReviewRequest<'_
                     "🤖 **Karna review failed**\n\n\
                      ```\n{truncated}\n```\n\n\
                      <sub>Reviewer: {agent_label}. Commit <code>{head_sha}</code>.</sub>",
-                    head_sha = &req.head_sha[..req.head_sha.len().min(8)],
+                    head_sha = &review.head_sha[..review.head_sha.len().min(8)],
                 )
             }
         };
-        if let Err(e) = update_pr_comment(req.repo, comment_id, &final_body).await {
+        if let Err(e) = update_pr_comment(&review.repo, comment_id, &final_body).await {
             warn!(error = %e, comment_id, "Failed to update progress comment");
         }
     }
@@ -219,13 +262,12 @@ pub async fn maybe_review_pr(config: Config, db: Database, req: ReviewRequest<'_
 async fn run_review(
     config: &Config,
     db: &Database,
-    review_id: Uuid,
+    review: &PrReview,
     cli_name: &str,
     model: &str,
     addendum: Option<&str>,
-    req: &ReviewRequest<'_>,
 ) -> Result<f64> {
-    let clone_path = workspace::ensure_cloned(&config.repos_dir, req.repo, &config.github_token)
+    let clone_path = workspace::ensure_cloned(&config.repos_dir, &review.repo, &config.github_token)
         .await
         .context("Failed to ensure repo is cloned for review")?;
 
@@ -236,34 +278,33 @@ async fn run_review(
         (None, None) => REVIEWER_SYSTEM_PROMPT.to_string(),
     };
 
-    let author_line = req
+    let author_line = review
         .author
+        .as_deref()
         .map(|a| format!("PR author: @{a}\n"))
         .unwrap_or_default();
     let prompt = format!(
         "Review pull request #{pr} on {repo}.\n\n\
          {author_line}\
-         Branch: {branch}\n\
          Commit: {sha}\n\n\
          Follow the review process described in your system instructions. \
          Use `gh pr diff {pr}` and `gh pr view {pr} --json files,title,body` \
          to see the change. Read surrounding code as needed. Post exactly one \
          review using `gh pr review {pr} --comment --body \"...\"`.",
-        pr = req.pr_number,
-        repo = req.repo,
-        branch = req.branch,
-        sha = req.head_sha,
+        pr = review.pr_number,
+        repo = review.repo,
+        sha = review.head_sha,
     );
 
     info!(
-        repo = req.repo,
-        pr = req.pr_number,
+        repo = %review.repo,
+        pr = review.pr_number,
         cli = cli_name,
         model,
         "Starting PR review"
     );
 
-    let event_tx = spawn_review_log_consumer(db.clone(), review_id);
+    let event_tx = spawn_review_log_consumer(db.clone(), review.id);
 
     let result = cli::run(
         cli_name,
@@ -285,7 +326,7 @@ async fn run_review(
     .context("CLI invocation failed during PR review")?;
 
     info!(
-        pr = req.pr_number,
+        pr = review.pr_number,
         cost_usd = result.cost_usd,
         "PR review submitted"
     );
