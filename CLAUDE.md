@@ -122,6 +122,7 @@ karna/
 │       ├── onboarding.rs        # Repo profile auto-discovery + smart planning support
 │       ├── claude/mod.rs        # Claude Code CLI runner
 │       ├── codex/mod.rs         # OpenAI Codex CLI runner
+│       ├── opencode/mod.rs      # opencode CLI runner (any model via OpenRouter)
 │       └── updater.rs           # Self-repo change detection + classification
 ├── frontend/
 │   ├── Dockerfile
@@ -787,6 +788,7 @@ All secrets live in `.env` (gitignored). User config lives in `config.yaml` (git
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | CLAUDE_CODE_OAUTH_TOKEN | Yes (cli: claude) | Claude Code CLI (OAuth token from `claude setup-token`) |
+| OPENROUTER_API_KEY | Yes (cli: opencode) | Pay-per-token access to any model via OpenRouter. Get one at https://openrouter.ai/settings/keys |
 | GITHUB_TOKEN | Yes | Git operations, PR creation |
 | AUTH_SECRET | Yes | Auth.js session encryption (generate with `openssl rand -hex 32`) |
 | DATABASE_URL | Auto | Set by docker-compose |
@@ -880,23 +882,32 @@ agent:
     codex:
       models: [gpt-5.4, gpt-5.4-mini, gpt-5.3-codex]
       default_model: gpt-5.4
+    opencode:
+      models: [openrouter/moonshotai/kimi-k2.6, openrouter/deepseek/deepseek-v3]
+      default_model: openrouter/moonshotai/kimi-k2.6
 ```
 
 | Backend | Binary | Auth | Models | MCP Support | Project Instructions |
 |---------|--------|------|--------|-------------|---------------------|
 | `claude` | `claude` | `~/.claude` (volume mount) | opus, sonnet, haiku | Yes (`--mcp-config`) | CLAUDE.md |
 | `codex` | `codex` | `~/.codex` (volume mount) | gpt-5.4, gpt-5.4-mini, gpt-5.3-codex | No | AGENTS.md |
+| `opencode` | `opencode` | `OPENROUTER_API_KEY` env (pay-per-token, any provider via OpenRouter) | Anything on openrouter.ai (Kimi K2, DeepSeek, Qwen, GLM, etc.) | Yes — Karna writes `~/.config/opencode/opencode.json` at startup, translated from `mcp_servers` in `config.yaml` | AGENTS.md |
 
 **Per-task columns:** `agent_tasks.cli` + `agent_tasks.model` (both nullable, default from config). Subtasks inherit parent's cli/model.
 
-**Dispatch flow:** `cli::run(task.cli, opts)` → `claude::run()` or `codex::run()`
+**Dispatch flow:** `cli::run(task.cli, opts)` → `claude::run()` or `codex::run()` or `opencode::run()`
 
-**AGENTS.md symlink:** Automatically created as `AGENTS.md → CLAUDE.md` in every repo/worktree so Codex can read the same project instructions. Created by `workspace::ensure_agents_md_symlink()` after clone and worktree creation.
+**AGENTS.md symlink:** Automatically created as `AGENTS.md → CLAUDE.md` in every repo/worktree so Codex and opencode can read the same project instructions. Created by `workspace::ensure_agents_md_symlink()` after clone and worktree creation.
+
+**opencode model strings:** Passed verbatim to `opencode -m`. The OpenRouter convention is `openrouter/<owner>/<model>` (e.g. `openrouter/moonshotai/kimi-k2.6`). To pin a specific OpenRouter sub-provider, drop an `opencode.json` into the repo (opencode merges project over global).
+
+**opencode MCP:** Karna translates the global `mcp_servers` list in `config.yaml` from the Claude shape (`{"mcpServers": {"name": {"command": "...", "args": [...], "env": {...}}}}`) into opencode's shape (`{"$schema": "...", "mcp": {"name": {"type": "local", "command": ["..."], "environment": {...}, "enabled": true}}}`) and writes it to `~/.config/opencode/opencode.json` on every startup + config hot-reload (`Config::write_opencode_global_config()` in [agent/src/config.rs](agent/src/config.rs)). Remote servers (`type: sse|http|remote`) become `type: remote` with `headers` instead of `environment`. The per-task `mcp_config_json` arg (which the Claude backend uses with `--mcp-config`) is ignored by the opencode runner — repo `.mcp.json` files are still in Claude format and don't apply to opencode; if you want per-repo MCP for opencode, commit a project-level `opencode.json` to the repo.
 
 **Key files:**
 - `agent/src/cli.rs` — Common `CliOptions`/`CliResult` types + dispatch
 - `agent/src/claude/mod.rs` — Claude Code CLI (`-p --dangerously-skip-permissions --output-format json`)
 - `agent/src/codex/mod.rs` — Codex CLI (`--full-auto --quiet`)
+- `agent/src/opencode/mod.rs` — opencode CLI (`run --format json --dangerously-skip-permissions -m <provider/model>`)
 - `agent/src/config.rs` — `Backends` (IndexMap), `default_cli()`, `default_model(cli)`
 
 ## Agent Instructions

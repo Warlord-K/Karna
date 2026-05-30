@@ -37,6 +37,19 @@ agent:
     codex:
       models: [gpt-5.4, gpt-5.4-mini, gpt-5.3-codex]
       default_model: gpt-5.4
+    # opencode routes through any OpenRouter model — pay per token, often
+    # much cheaper than Claude/Codex subscriptions for open-weight models.
+    # Requires OPENROUTER_API_KEY in .env. Model strings are passed verbatim
+    # to opencode's -m flag, so the full `provider/model` slug is expected.
+    # Browse models: https://openrouter.ai/models
+    opencode:
+      models:
+        - openrouter/moonshotai/kimi-k2.6
+        - openrouter/moonshotai/kimi-k2-thinking
+        - openrouter/deepseek/deepseek-v3
+        - openrouter/qwen/qwen3-coder
+        - openrouter/anthropic/claude-sonnet-4.6
+      default_model: openrouter/moonshotai/kimi-k2.6
 
 # ──────────────────────────────────────────────────────────
 # Commit Signing (optional, auto-detected)

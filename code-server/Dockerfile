@@ -34,6 +34,9 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 # Claude Code CLI + Codex CLI
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
+# opencode (OpenRouter-friendly CLI — Kimi K2, DeepSeek, Qwen, etc.)
+RUN OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
+
 # Use VS Code Marketplace instead of Open VSX (needed for anthropic.claude-code)
 ENV EXTENSIONS_GALLERY='{"serviceUrl":"https://marketplace.visualstudio.com/_apis/public/gallery","itemUrl":"https://marketplace.visualstudio.com/items"}'
 

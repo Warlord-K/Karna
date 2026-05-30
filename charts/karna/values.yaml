@@ -281,6 +281,12 @@ claude:
   existingSecret: ""
   existingSecretTokenKey: oauth-token
 
+# -- opencode / OpenRouter (required when the `opencode` backend is enabled)
+openrouter:
+  apiKey: ""
+  existingSecret: ""
+  existingSecretApiKeyKey: openrouter-api-key
+
 # -- Agent configuration (rendered as config.yaml)
 config:
   repos: []
@@ -297,6 +303,15 @@ config:
     codex:
       models: [gpt-5.4, gpt-5.4-mini, gpt-5.3-codex]
       default_model: gpt-5.4
+    # opencode routes through any OpenRouter model. Requires OPENROUTER_API_KEY
+    # in the deployment env (see secret.yaml / existingSecret).
+    opencode:
+      models:
+        - openrouter/moonshotai/kimi-k2.6
+        - openrouter/moonshotai/kimi-k2-thinking
+        - openrouter/deepseek/deepseek-v3
+        - openrouter/qwen/qwen3-coder
+      default_model: openrouter/moonshotai/kimi-k2.6
   mcpServers: []
   instructions: ""
   existingConfigMap: ""

@@ -467,6 +467,81 @@ impl Config {
 
         Some(serde_json::json!({ "mcpServers": servers }))
     }
+
+    /// Translate the configured MCP servers into opencode's `opencode.json` shape.
+    /// opencode uses a different schema than Claude (`mcp` vs `mcpServers`,
+    /// command-as-array, `environment` vs `env`, explicit `type: local|remote`).
+    /// Returns None when no MCP servers are configured.
+    pub fn opencode_config_json(&self) -> Option<serde_json::Value> {
+        if self.mcp_servers.is_empty() {
+            return None;
+        }
+
+        let mut servers = serde_json::Map::new();
+        for server in &self.mcp_servers {
+            let mut entry = serde_json::Map::new();
+            let is_remote = matches!(server.r#type.as_deref(), Some("sse") | Some("http") | Some("remote"));
+
+            if is_remote {
+                entry.insert("type".into(), "remote".into());
+                if let Some(url) = &server.url {
+                    entry.insert("url".into(), url.clone().into());
+                }
+                if !server.env.is_empty() {
+                    // opencode uses `headers` for remote auth, not env
+                    entry.insert("headers".into(), serde_json::json!(server.env));
+                }
+            } else {
+                entry.insert("type".into(), "local".into());
+                let mut command_arr: Vec<serde_json::Value> = Vec::new();
+                if let Some(cmd) = &server.command {
+                    command_arr.push(cmd.clone().into());
+                }
+                for a in &server.args {
+                    command_arr.push(a.clone().into());
+                }
+                if !command_arr.is_empty() {
+                    entry.insert("command".into(), serde_json::Value::Array(command_arr));
+                }
+                if !server.env.is_empty() {
+                    entry.insert("environment".into(), serde_json::json!(server.env));
+                }
+            }
+
+            entry.insert("enabled".into(), true.into());
+            servers.insert(server.name.clone(), entry.into());
+        }
+
+        Some(serde_json::json!({
+            "$schema": "https://opencode.ai/config.json",
+            "mcp": servers,
+        }))
+    }
+
+    /// Write the translated opencode config to `~/.config/opencode/opencode.json`
+    /// so the `opencode` CLI picks up Karna's MCP servers automatically. Skipped
+    /// when no opencode backend is configured or when no MCP servers exist.
+    /// Project-level `opencode.json` in a repo still wins — opencode merges
+    /// project over global.
+    pub fn write_opencode_global_config(&self) -> anyhow::Result<()> {
+        if !self.backends.contains_key("opencode") {
+            return Ok(());
+        }
+        let Some(cfg) = self.opencode_config_json() else {
+            return Ok(());
+        };
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/agent".to_string());
+        let dir = std::path::Path::new(&home).join(".config/opencode");
+        std::fs::create_dir_all(&dir).with_context(|| {
+            format!("Failed to create opencode config dir: {}", dir.display())
+        })?;
+        let path = dir.join("opencode.json");
+        let content = serde_json::to_string_pretty(&cfg)?;
+        std::fs::write(&path, content)
+            .with_context(|| format!("Failed to write opencode config: {}", path.display()))?;
+        tracing::info!(path = %path.display(), server_count = self.mcp_servers.len(), "Wrote opencode MCP config");
+        Ok(())
+    }
 }
 
 /// Merge a repo's .mcp.json into the global MCP config.

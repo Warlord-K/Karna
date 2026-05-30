@@ -103,6 +103,7 @@ fn shorten_path(path: &str) -> String {
 pub async fn run(backend: &str, opts: CliOptions<'_>) -> Result<CliResult> {
     match backend {
         "codex" => crate::codex::run(opts).await,
+        "opencode" => crate::opencode::run(opts).await,
         _ => crate::claude::run(opts).await,
     }
 }

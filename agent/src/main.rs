@@ -8,6 +8,7 @@ mod api;
 mod claude;
 mod cli;
 mod codex;
+mod opencode;
 mod config;
 mod db;
 mod external;
@@ -61,6 +62,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Configure SSH commit signing (auto-detected from ./signing/ mount or explicit config)
     git::workspace::configure_git_signing(config.signing.as_ref()).await?;
+
+    // Write the opencode MCP config (~/.config/opencode/opencode.json) so the
+    // `opencode` backend picks up Karna's MCP servers. No-op when opencode
+    // isn't in `agent.backends` or no MCP servers are configured.
+    if let Err(e) = config.write_opencode_global_config() {
+        warn!(error = %e, "Failed to write opencode MCP config");
+    }
 
     // Connect to Redis (first, so we can attach it to Database)
     let redis = redis::Client::open(config.redis_url.as_str())?;
@@ -202,6 +210,9 @@ async fn main() -> anyhow::Result<()> {
                             info!("Config reloaded (file changed on disk)");
                             config = new_config;
                             last_config_mtime = Some(current_mtime);
+                            if let Err(e) = config.write_opencode_global_config() {
+                                warn!(error = %e, "Failed to refresh opencode MCP config");
+                            }
                         }
                         Err(e) => warn!(error = %e, "Config reload failed, keeping previous"),
                     }

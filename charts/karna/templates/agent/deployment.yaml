@@ -78,6 +78,12 @@ spec:
                   name: {{ .Values.claude.existingSecret | default (include "karna.secretName" .) }}
                   key: {{ .Values.claude.existingSecretTokenKey | default "oauth-token" }}
                   optional: true
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.openrouter.existingSecret | default (include "karna.secretName" .) }}
+                  key: {{ .Values.openrouter.existingSecretApiKeyKey | default "openrouter-api-key" }}
+                  optional: true
             {{- if .Values.github.webhookSecret }}
             - name: GITHUB_WEBHOOK_SECRET
               valueFrom:

@@ -37,6 +37,9 @@ RUN ARCH=$(dpkg --print-architecture) \
 # Install Claude Code CLI + Codex CLI
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
+# Install opencode (OpenRouter-friendly CLI — Kimi K2, DeepSeek, Qwen, etc.)
+RUN OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
+
 # safe.directory is static, set at build time
 RUN git config --global safe.directory "*"
 
