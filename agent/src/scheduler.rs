@@ -320,18 +320,37 @@ async fn execute_schedule_inner(
             tasks_to_create.len()
         };
 
+        let schedule_repos = schedule.repos();
         for (i, task_def) in tasks_to_create.iter().take(remaining_slots).enumerate() {
             let corrected_title = normalize_prefix_title(&task_def.title, prefix, next_number + i as i32);
+
+            // Resolve repo: the schedule's configured repos take precedence over
+            // whatever the LLM emitted. This prevents tasks from leaking onto
+            // repos the schedule wasn't scoped to.
+            let resolved_repo: Option<String> = match schedule_repos.len() {
+                1 => Some(schedule_repos[0].to_string()),
+                0 => {
+                    if task_def.repo.is_empty() {
+                        None
+                    } else {
+                        Some(task_def.repo.clone())
+                    }
+                }
+                _ => {
+                    if !task_def.repo.is_empty() && schedule_repos.contains(&task_def.repo.as_str()) {
+                        Some(task_def.repo.clone())
+                    } else {
+                        None
+                    }
+                }
+            };
+
             let task = db
                 .create_task_from_schedule(
                     schedule.user_id,
                     &corrected_title,
                     Some(&task_def.description),
-                    if task_def.repo.is_empty() {
-                        None
-                    } else {
-                        Some(&task_def.repo)
-                    },
+                    resolved_repo.as_deref(),
                     &schedule.priority,
                     schedule.cli.as_deref(),
                     schedule.model.as_deref(),

@@ -280,7 +280,15 @@ Description: {description}
 - Keep changes minimal and focused
 - Commit using Conventional Commits: type(scope): description
 - NEVER add Co-Authored-By or Signed-off-by trailers to commits
-- Do NOT refactor beyond what the feedback requires"#,
+- Do NOT refactor beyond what the feedback requires
+
+## Git Workflow (CRITICAL)
+Karna manages the git workflow. Your job is ONLY to edit files and make commits inside the working directory.
+- DO NOT run `cd` to leave the working directory. Stay in the directory you started in.
+- DO NOT run `git checkout`, `git checkout -b`, `git switch`, or `git branch`. The correct branch is already checked out for you.
+- DO NOT run `git push`. Karna pushes after you finish.
+- DO NOT run `gh pr create`, `gh pr edit`, or any other PR-mutating gh command. The PR already exists; karna pushes your follow-up commits to update it.
+- If you skip these rules, your changes will not reach the existing PR and the feedback loop will fail."#,
         title = task.title,
     );
 
