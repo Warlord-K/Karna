@@ -1,9 +1,14 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
+import { useAuthDisabled } from '@/lib/auth-context';
+import { useConfig } from '@/hooks/use-tasks';
+import { BackendConfig } from '@/components/agent/create-task-dialog';
 import {
   Schedule,
+  SchedulePriority,
   ScheduledRun,
   ScheduledRunLog,
   humanizeCron,
@@ -25,12 +30,51 @@ import { formatDistanceToNow, format } from 'date-fns';
 import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
 
+const PRIORITIES: { value: SchedulePriority; label: string }[] = [
+  { value: 'urgent', label: 'Urgent' },
+  { value: 'high',   label: 'High' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'low',    label: 'Low' },
+];
+
+const CRON_PRESETS = [
+  { label: 'Every 30 min',     value: '*/30 * * * *' },
+  { label: 'Every hour',       value: '0 * * * *' },
+  { label: 'Every 4 hours',    value: '0 */4 * * *' },
+  { label: 'Every 12 hours',   value: '0 */12 * * *' },
+  { label: 'Daily at 9am',     value: '0 9 * * *' },
+  { label: 'Weekdays at 9am',  value: '0 9 * * 1-5' },
+  { label: 'Weekly (Mon 9am)', value: '0 9 * * 1' },
+  { label: 'Custom',           value: '' },
+];
+
+// datetime-local input value <-> ISO 8601 with timezone.
+// run_at is stored as UTC ISO 8601; the input control wants local time `YYYY-MM-DDTHH:mm`.
+function isoToLocalInput(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function localInputToIso(local: string): string | null {
+  if (!local) return null;
+  const d = new Date(local);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
 type Tab = 'details' | 'runs';
 
 export default function ScheduleDetailPage() {
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
+
+  const authDisabled = useAuthDisabled();
+  const { status: authStatus } = useSession();
+  const isReady = authDisabled || authStatus === 'authenticated';
 
   const [activeTab, setActiveTab] = useState<Tab>('runs');
   const [selectedRun, setSelectedRun] = useState<ScheduledRun | null>(null);
@@ -40,6 +84,7 @@ export default function ScheduleDetailPage() {
 
   // Fetch the schedule from the list cache or individually
   const { data: schedules = [] } = useSchedules();
+  const { data: config } = useConfig(isReady);
   const schedule = schedules.find(s => s.id === id) ?? null;
 
   const updateMutation = useUpdateSchedule();
@@ -176,7 +221,14 @@ export default function ScheduleDetailPage() {
         ) : activeTab === 'runs' ? (
           <RunsList runs={runs} onSelectRun={setSelectedRun} />
         ) : (
-          <ScheduleDetails schedule={schedule} onUpdate={handleUpdate} />
+          <ScheduleDetails
+            schedule={schedule}
+            onUpdate={handleUpdate}
+            repos={config?.repos ?? []}
+            backends={config?.backends ?? {}}
+            allSkills={config?.skills ?? []}
+            allMcpServers={config?.mcpServers ?? []}
+          />
         )}
       </div>
     </div>
@@ -298,74 +350,384 @@ function RunDetail({ run, logs, logsEndRef }: {
   );
 }
 
-function ScheduleDetails({ schedule, onUpdate }: {
+function ScheduleDetails({
+  schedule, onUpdate, repos, backends, allSkills, allMcpServers,
+}: {
   schedule: Schedule;
   onUpdate: (updates: Partial<Schedule>) => Promise<void>;
+  repos: string[];
+  backends: Record<string, BackendConfig>;
+  allSkills: string[];
+  allMcpServers: string[];
 }) {
-  const isOneShot = !!schedule.run_at;
+  const backendNames = Object.keys(backends);
+  const initialIsOneShot = !!schedule.run_at;
+
+  const [name, setName] = useState(schedule.name);
+  const [prompt, setPrompt] = useState(schedule.prompt);
+  const [mode, setMode] = useState<'cron' | 'once'>(initialIsOneShot ? 'once' : 'cron');
+  const initialCron = schedule.cron_expression ?? '0 */4 * * *';
+  const isInitialCronPreset = CRON_PRESETS.some(p => p.value === initialCron);
+  const [cronPreset, setCronPreset] = useState(isInitialCronPreset ? initialCron : '');
+  const [customCron, setCustomCron] = useState(isInitialCronPreset ? '' : initialCron);
+  const [runAtLocal, setRunAtLocal] = useState(isoToLocalInput(schedule.run_at));
+  const [selectedRepos, setSelectedRepos] = useState<string[]>(
+    schedule.repos ? schedule.repos.split(',').map(r => r.trim()).filter(Boolean) : []
+  );
+  const [selectedSkills, setSelectedSkills] = useState<string[]>(schedule.skills ?? []);
+  const [selectedMcp, setSelectedMcp] = useState<string[]>(schedule.mcp_servers ?? []);
+  const [maxOpenTasks, setMaxOpenTasks] = useState(schedule.max_open_tasks);
+  const [taskPrefix, setTaskPrefix] = useState(schedule.task_prefix ?? '');
+  const [priority, setPriority] = useState<SchedulePriority>(schedule.priority);
+  const [cli, setCli] = useState(schedule.cli ?? backendNames[0] ?? 'claude');
+  const [model, setModel] = useState(schedule.model ?? backends[schedule.cli ?? '']?.default_model ?? '');
+  const [saving, setSaving] = useState(false);
+
+  // Reset form when navigating between schedules
+  const lastScheduleId = useRef(schedule.id);
+  useEffect(() => {
+    if (lastScheduleId.current !== schedule.id) {
+      lastScheduleId.current = schedule.id;
+      setName(schedule.name);
+      setPrompt(schedule.prompt);
+      setMode(schedule.run_at ? 'once' : 'cron');
+      const cron = schedule.cron_expression ?? '0 */4 * * *';
+      const preset = CRON_PRESETS.some(p => p.value === cron);
+      setCronPreset(preset ? cron : '');
+      setCustomCron(preset ? '' : cron);
+      setRunAtLocal(isoToLocalInput(schedule.run_at));
+      setSelectedRepos(schedule.repos ? schedule.repos.split(',').map(r => r.trim()).filter(Boolean) : []);
+      setSelectedSkills(schedule.skills ?? []);
+      setSelectedMcp(schedule.mcp_servers ?? []);
+      setMaxOpenTasks(schedule.max_open_tasks);
+      setTaskPrefix(schedule.task_prefix ?? '');
+      setPriority(schedule.priority);
+      setCli(schedule.cli ?? backendNames[0] ?? 'claude');
+      setModel(schedule.model ?? backends[schedule.cli ?? '']?.default_model ?? '');
+    }
+  }, [schedule, backendNames, backends]);
+
+  // When CLI changes, reset model to default for that CLI unless current model is valid for it
+  useEffect(() => {
+    const backend = backends[cli];
+    if (!backend) return;
+    if (!backend.models.includes(model)) {
+      setModel(backend.default_model || backend.models[0] || '');
+    }
+  }, [cli, backends, model]);
+
+  const cronValue = cronPreset || customCron;
+  const currentModels = backends[cli]?.models ?? (model ? [model] : []);
+
+  const desiredUpdates: Partial<Schedule> = useMemo(() => ({
+    name: name.trim(),
+    prompt: prompt.trim(),
+    cron_expression: mode === 'cron' ? cronValue : null,
+    run_at: mode === 'once' ? localInputToIso(runAtLocal) : null,
+    repos: selectedRepos.length > 0 ? selectedRepos.join(',') : null,
+    skills: selectedSkills,
+    mcp_servers: selectedMcp,
+    max_open_tasks: maxOpenTasks,
+    task_prefix: taskPrefix.trim() || null,
+    priority,
+    cli,
+    model,
+  }), [name, prompt, mode, cronValue, runAtLocal, selectedRepos, selectedSkills, selectedMcp, maxOpenTasks, taskPrefix, priority, cli, model]);
+
+  const isDirty = useMemo(() => {
+    const cur: Partial<Schedule> = {
+      name: schedule.name,
+      prompt: schedule.prompt,
+      cron_expression: schedule.cron_expression,
+      run_at: schedule.run_at,
+      repos: schedule.repos,
+      skills: schedule.skills ?? [],
+      mcp_servers: schedule.mcp_servers ?? [],
+      max_open_tasks: schedule.max_open_tasks,
+      task_prefix: schedule.task_prefix,
+      priority: schedule.priority,
+      cli: schedule.cli,
+      model: schedule.model,
+    };
+    const arrEq = (a: string[] | null | undefined, b: string[] | null | undefined) => {
+      const aa = a ?? []; const bb = b ?? [];
+      return aa.length === bb.length && aa.every((x, i) => x === bb[i]);
+    };
+    return (
+      cur.name !== desiredUpdates.name ||
+      cur.prompt !== desiredUpdates.prompt ||
+      cur.cron_expression !== desiredUpdates.cron_expression ||
+      cur.run_at !== desiredUpdates.run_at ||
+      cur.repos !== desiredUpdates.repos ||
+      !arrEq(cur.skills, desiredUpdates.skills) ||
+      !arrEq(cur.mcp_servers, desiredUpdates.mcp_servers) ||
+      cur.max_open_tasks !== desiredUpdates.max_open_tasks ||
+      cur.task_prefix !== desiredUpdates.task_prefix ||
+      cur.priority !== desiredUpdates.priority ||
+      cur.cli !== desiredUpdates.cli ||
+      cur.model !== desiredUpdates.model
+    );
+  }, [schedule, desiredUpdates]);
+
+  const canSave =
+    !!desiredUpdates.name && !!desiredUpdates.prompt &&
+    (mode === 'cron' ? !!cronValue : !!desiredUpdates.run_at);
+
+  const handleSave = async () => {
+    if (!canSave) return;
+    setSaving(true);
+    try {
+      await onUpdate(desiredUpdates);
+      toast.success('Schedule updated');
+    } catch {
+      toast.error('Failed to save schedule');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleItem = (list: string[], setList: (v: string[]) => void, item: string) => {
+    setList(list.includes(item) ? list.filter(i => i !== item) : [...list, item]);
+  };
+
+  const inputClass = "w-full h-9 px-3 text-[14px] rounded-lg bg-gray-2 border border-gray-4 text-gray-11 placeholder:text-gray-7 focus:outline-none focus:border-gray-6";
+  const labelClass = "block text-[12px] font-medium text-gray-8 mb-2 uppercase tracking-wider";
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
+      {/* Name */}
       <div>
-        <label className="block text-[12px] font-medium text-gray-8 mb-2 uppercase tracking-wider">Prompt</label>
-        <div className="rounded-lg bg-gray-2 border border-gray-4 p-3 text-[14px] text-gray-11 font-mono whitespace-pre-wrap">
-          {schedule.prompt}
+        <label className={labelClass}>Name</label>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className={inputClass}
+        />
+      </div>
+
+      {/* Prompt */}
+      <div>
+        <label className={labelClass}>Prompt</label>
+        <textarea
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          rows={4}
+          className="w-full px-3 py-2.5 text-[14px] rounded-lg bg-gray-2 border border-gray-4 text-gray-11 placeholder:text-gray-7 focus:outline-none focus:border-gray-6 font-mono"
+        />
+      </div>
+
+      {/* Mode toggle */}
+      <div>
+        <label className={labelClass}>Schedule type</label>
+        <div className="flex gap-1.5">
+          <button
+            type="button"
+            onClick={() => setMode('cron')}
+            className={`flex-1 h-9 rounded-lg text-[13px] font-medium transition-colors border flex items-center justify-center gap-1.5 ${
+              mode === 'cron'
+                ? 'bg-gray-3 border-gray-5 text-gray-12'
+                : 'bg-transparent border-gray-4 text-gray-8 hover:text-gray-11 hover:bg-gray-3'
+            }`}
+          >
+            <Clock size={14} weight="bold" /> Recurring
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('once')}
+            className={`flex-1 h-9 rounded-lg text-[13px] font-medium transition-colors border flex items-center justify-center gap-1.5 ${
+              mode === 'once'
+                ? 'bg-gray-3 border-gray-5 text-gray-12'
+                : 'bg-transparent border-gray-4 text-gray-8 hover:text-gray-11 hover:bg-gray-3'
+            }`}
+          >
+            <Timer size={14} weight="bold" /> One-shot
+          </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 text-[13px]">
-        <div className="rounded-lg bg-gray-2 border border-gray-4 p-3">
-          <span className="text-gray-8">Schedule</span>
-          <p className="text-gray-12 mt-1">
-            {isOneShot
-              ? `Once at ${new Date(schedule.run_at!).toLocaleString()}`
-              : humanizeCron(schedule.cron_expression!)}
-          </p>
-          {!isOneShot && (
-            <p className="text-gray-7 font-mono text-[12px] mt-0.5">{schedule.cron_expression}</p>
+      {mode === 'cron' ? (
+        <div>
+          <label className={labelClass}>Frequency</label>
+          <select
+            value={cronPreset}
+            onChange={(e) => setCronPreset(e.target.value)}
+            className={`${inputClass} cursor-pointer`}
+          >
+            {CRON_PRESETS.map((p) => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+          </select>
+          {!cronPreset && (
+            <input
+              value={customCron}
+              onChange={(e) => setCustomCron(e.target.value)}
+              placeholder="e.g. 0 */6 * * *"
+              className={`${inputClass} mt-2 font-mono`}
+            />
+          )}
+          {cronValue && cronPreset && (
+            <p className="text-[12px] text-gray-7 font-mono mt-1.5">{cronValue}</p>
           )}
         </div>
-
-        <div className="rounded-lg bg-gray-2 border border-gray-4 p-3">
-          <span className="text-gray-8">Priority</span>
-          <p className="text-gray-12 mt-1 capitalize">{schedule.priority}</p>
+      ) : (
+        <div>
+          <label className={labelClass}>Run at</label>
+          <input
+            type="datetime-local"
+            value={runAtLocal}
+            onChange={(e) => setRunAtLocal(e.target.value)}
+            className={inputClass}
+          />
         </div>
+      )}
 
-        {schedule.repos && (
-          <div className="rounded-lg bg-gray-2 border border-gray-4 p-3">
-            <span className="text-gray-8">Repositories</span>
-            <p className="text-gray-12 mt-1 font-mono text-[12px]">
-              {schedule.repos.split(',').map(r => r.trim().split('/').pop()).join(', ')}
-            </p>
+      {/* Repos + Prefix + Max */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label className={labelClass}>Repositories</label>
+          <div className="space-y-1.5 max-h-40 overflow-y-auto">
+            {repos.length === 0 ? (
+              <p className="text-[13px] text-gray-7">All configured repos</p>
+            ) : (
+              repos.map((r) => (
+                <label key={r} className="flex items-center gap-2 cursor-pointer text-[13px] text-gray-11">
+                  <input
+                    type="checkbox"
+                    checked={selectedRepos.includes(r)}
+                    onChange={() => toggleItem(selectedRepos, setSelectedRepos, r)}
+                    className="rounded border-gray-5"
+                  />
+                  {r}
+                </label>
+              ))
+            )}
           </div>
-        )}
-
-        <div className="rounded-lg bg-gray-2 border border-gray-4 p-3">
-          <span className="text-gray-8">Max open tasks</span>
-          <p className="text-gray-12 mt-1">{schedule.max_open_tasks === 0 ? 'Unlimited' : schedule.max_open_tasks}</p>
+          {selectedRepos.length === 0 && repos.length > 0 && (
+            <p className="text-[11px] text-gray-7 mt-1">None selected = all repos</p>
+          )}
         </div>
-
-        {(schedule.cli || schedule.model) && (
-          <div className="rounded-lg bg-gray-2 border border-gray-4 p-3">
-            <span className="text-gray-8">Agent</span>
-            <p className="text-gray-12 mt-1">
-              {schedule.cli || 'default'} / {schedule.model || 'default'}
-            </p>
+        <div className="space-y-4">
+          <div>
+            <label className={labelClass}>Task prefix</label>
+            <input
+              value={taskPrefix}
+              onChange={(e) => setTaskPrefix(e.target.value.toUpperCase())}
+              placeholder="e.g. BUG, FEA, SEC"
+              className={`${inputClass} font-mono`}
+            />
           </div>
-        )}
-
-        {schedule.skills && schedule.skills.length > 0 && (
-          <div className="rounded-lg bg-gray-2 border border-gray-4 p-3">
-            <span className="text-gray-8">Skills</span>
-            <div className="flex flex-wrap gap-1 mt-1">
-              {schedule.skills.map(s => (
-                <span key={s} className="px-1.5 py-0.5 rounded bg-gray-3 text-gray-11 text-[11px] font-mono">{s}</span>
-              ))}
-            </div>
+          <div>
+            <label className={labelClass}>Max open tasks</label>
+            <input
+              type="number"
+              min={0}
+              max={50}
+              value={maxOpenTasks}
+              onChange={(e) => setMaxOpenTasks(parseInt(e.target.value) || 0)}
+              className={inputClass}
+            />
+            <p className="text-[11px] text-gray-7 mt-1">0 = unlimited</p>
           </div>
-        )}
+        </div>
       </div>
 
+      {/* Priority */}
+      <div>
+        <label className={labelClass}>Task priority</label>
+        <div className="flex gap-1.5">
+          {PRIORITIES.map((p) => (
+            <button
+              key={p.value}
+              type="button"
+              onClick={() => setPriority(p.value)}
+              className={`flex-1 h-9 rounded-lg text-[12px] font-medium transition-colors border ${
+                priority === p.value
+                  ? 'bg-gray-3 border-gray-5 text-gray-12'
+                  : 'bg-transparent border-gray-4 text-gray-8 hover:text-gray-11 hover:bg-gray-3'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Agent + Model */}
+      {backendNames.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Agent CLI</label>
+            <select value={cli} onChange={(e) => setCli(e.target.value)} className={`${inputClass} cursor-pointer`}>
+              {backendNames.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className={labelClass}>Model</label>
+            <select value={model} onChange={(e) => setModel(e.target.value)} className={`${inputClass} cursor-pointer`}>
+              {currentModels.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {/* Skills */}
+      {allSkills.length > 0 && (
+        <div>
+          <label className={labelClass}>Skills</label>
+          <div className="flex flex-wrap gap-1.5">
+            {allSkills.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => toggleItem(selectedSkills, setSelectedSkills, s)}
+                className={`px-2.5 h-7 rounded-md text-[12px] font-medium transition-colors border ${
+                  selectedSkills.includes(s)
+                    ? 'bg-gray-3 border-gray-5 text-gray-12'
+                    : 'bg-transparent border-gray-4 text-gray-8 hover:text-gray-11'
+                }`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* MCP servers */}
+      {allMcpServers.length > 0 && (
+        <div>
+          <label className={labelClass}>MCP servers</label>
+          <div className="flex flex-wrap gap-1.5">
+            {allMcpServers.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => toggleItem(selectedMcp, setSelectedMcp, s)}
+                className={`px-2.5 h-7 rounded-md text-[12px] font-medium transition-colors border ${
+                  selectedMcp.includes(s)
+                    ? 'bg-gray-3 border-gray-5 text-gray-12'
+                    : 'bg-transparent border-gray-4 text-gray-8 hover:text-gray-11'
+                }`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Save changes */}
+      <div className="flex items-center justify-end gap-2 pt-4 border-t border-gray-3">
+        <button
+          onClick={handleSave}
+          disabled={!isDirty || !canSave || saving}
+          className="h-9 px-4 text-[14px] font-medium text-white bg-sun-9 hover:bg-sun-10 text-gray-1 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {saving ? 'Saving...' : 'Save changes'}
+        </button>
+      </div>
+
+      {/* Enable / pause */}
       <div className="flex items-center justify-between pt-4 border-t border-gray-3">
         <div>
           <p className="text-[14px] text-gray-12 font-medium">
@@ -392,6 +754,12 @@ function ScheduleDetails({ schedule, onUpdate }: {
           <Clock size={13} weight="bold" />
           Created {format(new Date(schedule.created_at), 'MMM d, yyyy h:mm a')}
         </div>
+        {schedule.cron_expression && (
+          <div className="flex items-center gap-1.5 font-mono text-[12px] text-gray-7">
+            <Gear size={13} weight="bold" />
+            {humanizeCron(schedule.cron_expression)}
+          </div>
+        )}
       </div>
     </div>
   );

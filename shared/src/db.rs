@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -704,7 +704,6 @@ impl Database {
         user_id: Uuid,
         updates: &serde_json::Value,
     ) -> Result<u64> {
-        // Simple approach: update each known field if present
         let obj = match updates.as_object() {
             Some(o) => o,
             None => return Ok(0),
@@ -713,12 +712,38 @@ impl Database {
         let mut set_parts = Vec::new();
         let mut bind_idx = 1u32;
         let mut string_vals: Vec<Option<String>> = Vec::new();
+        let mut timestamp_vals: Vec<Option<DateTime<Utc>>> = Vec::new();
+        let mut array_vals: Vec<Option<Vec<String>>> = Vec::new();
 
         let text_fields = ["name", "prompt", "repos", "cron_expression", "task_prefix", "priority", "cli", "model"];
         for field in &text_fields {
             if let Some(val) = obj.get(*field) {
                 set_parts.push(format!("\"{}\" = ${}", field, bind_idx));
                 string_vals.push(val.as_str().map(|s| s.to_string()));
+                bind_idx += 1;
+            }
+        }
+
+        if let Some(val) = obj.get("run_at") {
+            set_parts.push(format!("run_at = ${}", bind_idx));
+            let parsed = val
+                .as_str()
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&Utc));
+            timestamp_vals.push(parsed);
+            bind_idx += 1;
+        }
+
+        let array_fields = ["skills", "mcp_servers"];
+        for field in &array_fields {
+            if let Some(val) = obj.get(*field) {
+                set_parts.push(format!("{} = ${}", field, bind_idx));
+                let parsed = val.as_array().map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect::<Vec<String>>()
+                });
+                array_vals.push(parsed);
                 bind_idx += 1;
             }
         }
@@ -761,6 +786,12 @@ impl Database {
                 Some(s) => query = query.bind(s),
                 None => query = query.bind(None::<String>),
             }
+        }
+        for val in &timestamp_vals {
+            query = query.bind(*val);
+        }
+        for val in &array_vals {
+            query = query.bind(val.as_deref());
         }
         if self.shared_workspace {
             query = query.bind(id);

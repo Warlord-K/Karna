@@ -8,9 +8,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { useAuthDisabled } from '@/lib/auth-context';
 import { useConfig } from '@/hooks/use-tasks';
-import { AgentProfile, updateAgent } from '@/lib/agents';
+import { AgentProfile, updateAgent, deleteAgent } from '@/lib/agents';
 import { AgentTask, getTaskLabel, getTaskTitle } from '@/lib/agent-tasks';
-import { ArrowLeft, Robot, Lightning, GitPullRequest } from '@phosphor-icons/react';
+import { ArrowLeft, Lightning, GitPullRequest, Trash } from '@phosphor-icons/react';
 
 interface AgentStats {
   total_tasks: number;
@@ -145,6 +145,22 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     }
   };
 
+  const handleDelete = async () => {
+    if (!profile) return;
+    const ok = confirm(
+      `Delete agent "${profile.name}"?\n\nTasks currently assigned to this agent will fall back to "any agent" pickup. This cannot be undone.`
+    );
+    if (!ok) return;
+    try {
+      await deleteAgent(profile.id);
+      qc.invalidateQueries({ queryKey: ['agents'] });
+      toast.success('Agent deleted');
+      router.push('/agents');
+    } catch {
+      toast.error('Failed to delete agent');
+    }
+  };
+
   if (isLoading || !profile) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -216,6 +232,13 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 Edit
               </button>
             )}
+            <button
+              onClick={handleDelete}
+              title="Delete agent"
+              className="h-8 w-8 flex items-center justify-center text-gray-8 hover:text-red-400 hover:bg-gray-3 rounded-md transition-colors"
+            >
+              <Trash size={14} weight="bold" />
+            </button>
           </div>
         </div>
 
