@@ -337,12 +337,16 @@ export default function NewTaskPage() {
                 </div>
                 <div>
                   <label className={labelClass}>Model</label>
-                  <div className="relative">
-                    <select value={model} onChange={(e) => setModel(e.target.value)} className={selectClass}>
-                      {currentModels.map((m) => <option key={m} value={m}>{m}</option>)}
-                    </select>
-                    <CaretDown size={14} weight="bold" className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-7 pointer-events-none" />
-                  </div>
+                  <input
+                    list={`tasks-new-models-${cli}`}
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder="model name (any)"
+                    className="w-full h-9 px-3 text-[14px] rounded-lg bg-gray-2 border border-gray-4 text-gray-11 placeholder:text-gray-7 focus:outline-none focus:border-gray-6"
+                  />
+                  <datalist id={`tasks-new-models-${cli}`}>
+                    {currentModels.map((m) => <option key={m} value={m} />)}
+                  </datalist>
                 </div>
               </div>
             )}

@@ -38,7 +38,8 @@ RUN ARCH=$(dpkg --print-architecture) \
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
 # Install opencode (OpenRouter-friendly CLI — Kimi K2, DeepSeek, Qwen, etc.)
-RUN OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
+# Env var must be set on the bash invocation, not curl — the installer reads it in bash.
+RUN curl -fsSL https://opencode.ai/install | OPENCODE_INSTALL_DIR=/usr/local/bin bash
 
 # safe.directory is static, set at build time
 RUN git config --global safe.directory "*"

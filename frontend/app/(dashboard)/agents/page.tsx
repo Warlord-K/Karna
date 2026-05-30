@@ -228,9 +228,16 @@ function NewAgentDialog({
               </div>
               <div>
                 <label className={labelClass}>Model</label>
-                <select value={model} onChange={(e) => setModel(e.target.value)} className={`${inputClass} cursor-pointer`}>
-                  {currentModels.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
+                <input
+                  list={`agents-new-models-${cli}`}
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder="model name (any)"
+                  className={inputClass}
+                />
+                <datalist id={`agents-new-models-${cli}`}>
+                  {currentModels.map((m) => <option key={m} value={m} />)}
+                </datalist>
               </div>
             </div>
           )}

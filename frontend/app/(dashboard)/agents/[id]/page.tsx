@@ -274,9 +274,16 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               </div>
               <div>
                 <label className={labelClass}>Model</label>
-                <select className={inputClass} value={editModel} onChange={(e) => setEditModel(e.target.value)}>
-                  {availableModels.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
+                <input
+                  list={`agent-edit-models-${editCli}`}
+                  value={editModel}
+                  onChange={(e) => setEditModel(e.target.value)}
+                  placeholder="model name (any)"
+                  className={inputClass}
+                />
+                <datalist id={`agent-edit-models-${editCli}`}>
+                  {availableModels.map((m) => <option key={m} value={m} />)}
+                </datalist>
               </div>
             </div>
             <div>

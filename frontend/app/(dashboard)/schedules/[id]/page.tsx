@@ -407,14 +407,15 @@ function ScheduleDetails({
     }
   }, [schedule, backendNames, backends]);
 
-  // When CLI changes, reset model to default for that CLI unless current model is valid for it
+  // When CLI changes, reset model to the new CLI's default. User can then type any model.
+  // Skips on initial mount because the load effect above already set model from the schedule row.
+  const cliRef = useRef(cli);
   useEffect(() => {
+    if (cliRef.current === cli) return;
+    cliRef.current = cli;
     const backend = backends[cli];
-    if (!backend) return;
-    if (!backend.models.includes(model)) {
-      setModel(backend.default_model || backend.models[0] || '');
-    }
-  }, [cli, backends, model]);
+    if (backend) setModel(backend.default_model || backend.models[0] || '');
+  }, [cli, backends]);
 
   const cronValue = cronPreset || customCron;
   const currentModels = backends[cli]?.models ?? (model ? [model] : []);
@@ -663,9 +664,16 @@ function ScheduleDetails({
           </div>
           <div>
             <label className={labelClass}>Model</label>
-            <select value={model} onChange={(e) => setModel(e.target.value)} className={`${inputClass} cursor-pointer`}>
-              {currentModels.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
+            <input
+              list={`schedule-edit-models-${cli}`}
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder="model name (any)"
+              className={inputClass}
+            />
+            <datalist id={`schedule-edit-models-${cli}`}>
+              {currentModels.map((m) => <option key={m} value={m} />)}
+            </datalist>
           </div>
         </div>
       )}
