@@ -156,7 +156,8 @@ fn is_schedule_due(schedule: &Schedule, last_run: Option<&ScheduledRun>) -> bool
 
     // Cron: due if next occurrence after last run is in the past
     if let Some(cron_expr) = &schedule.cron_expression {
-        let cron_schedule = match CronSchedule::from_str(cron_expr) {
+        let normalized = karna_shared::cron_util::normalize(cron_expr);
+        let cron_schedule = match CronSchedule::from_str(&normalized) {
             Ok(s) => s,
             Err(e) => {
                 warn!(schedule = %schedule.name, error = %e, "Invalid cron expression");

@@ -59,6 +59,12 @@ pub async fn create(
         return Err(StatusCode::BAD_REQUEST);
     }
 
+    if let Some(expr) = body.cron_expression.as_deref() {
+        if !expr.trim().is_empty() && karna_shared::cron_util::validate(expr).is_err() {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
     let schedule = state
         .db
         .create_schedule(
@@ -111,6 +117,12 @@ pub async fn update(
     Path(id): Path<Uuid>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
+    if let Some(expr) = body.get("cron_expression").and_then(|v| v.as_str()) {
+        if !expr.trim().is_empty() && karna_shared::cron_util::validate(expr).is_err() {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
     let rows = state
         .db
         .update_schedule_fields(id, user.0, &body)
