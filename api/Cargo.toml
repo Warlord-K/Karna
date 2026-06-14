@@ -30,3 +30,5 @@ indexmap = { version = "2", features = ["serde"] }
 regex-lite = "0.1"
 urlencoding = "2"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+futures-util = "0.3"
+async-stream = "0.3"

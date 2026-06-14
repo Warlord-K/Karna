@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use std::path::{Path, PathBuf};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tracing::{debug, info};
 
@@ -24,6 +25,49 @@ Git commit rules:\n\
 /// Uses `--output-format stream-json` to get newline-delimited JSON events,
 /// parsed in real-time so callers can observe tool usage and progress.
 pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
+    let mcp_config_path = if let Some(mcp_json) = opts.mcp_config_json.as_deref() {
+        Some(write_mcp_config_temp_file(mcp_json).await?)
+    } else {
+        None
+    };
+
+    let result = run_inner(&opts, mcp_config_path.as_deref()).await;
+
+    // Best-effort cleanup so MCP env secrets don't linger in /tmp.
+    if let Some(path) = mcp_config_path {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    result
+}
+
+async fn write_mcp_config_temp_file(mcp_json: &str) -> Result<PathBuf> {
+    let path = std::env::temp_dir().join(format!("karna-claude-mcp-{}.json", uuid::Uuid::new_v4()));
+
+    tokio::fs::write(&path, mcp_json.as_bytes()).await.with_context(|| {
+        format!(
+            "Failed to write Claude MCP config temp file: {}",
+            path.display()
+        )
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to set Claude MCP config temp file permissions: {}",
+                    path.display()
+                )
+            })?;
+    }
+
+    Ok(path)
+}
+
+async fn run_inner(opts: &CliOptions<'_>, mcp_config_path: Option<&Path>) -> Result<CliResult> {
     let mut cmd = Command::new("claude");
     cmd.current_dir(opts.working_dir);
 
@@ -59,9 +103,9 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
         cmd.arg("--allowedTools").arg(tools);
     }
 
-    // MCP config — can be passed as JSON string directly
-    if let Some(mcp_json) = &opts.mcp_config_json {
-        cmd.arg("--mcp-config").arg(mcp_json);
+    // MCP config — Claude accepts a path, which avoids secrets in argv.
+    if let Some(path) = mcp_config_path {
+        cmd.arg("--mcp-config").arg(path);
     }
 
     // Attach images for vision input
@@ -69,7 +113,10 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
         cmd.arg("--image").arg(image_path);
     }
     if !opts.image_paths.is_empty() {
-        info!(image_count = opts.image_paths.len(), "Attaching images to Claude Code");
+        info!(
+            image_count = opts.image_paths.len(),
+            "Attaching images to Claude Code"
+        );
     }
 
     // Pipe prompt via stdin (avoids Linux MAX_ARG_STRLEN 128KB limit)
@@ -90,7 +137,6 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
 
     // Write prompt to stdin then close so the process can proceed
     if let Some(mut stdin) = child.stdin.take() {
-        use tokio::io::AsyncWriteExt;
         stdin.write_all(opts.prompt.as_bytes()).await?;
         drop(stdin);
     }
@@ -161,10 +207,8 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
                     .get("total_cost_usd")
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0);
-                is_error_response = json
-                    .get("subtype")
-                    .and_then(|v| v.as_str())
-                    == Some("error_response");
+                is_error_response =
+                    json.get("subtype").and_then(|v| v.as_str()) == Some("error_response");
             }
             _ => {}
         }
@@ -204,4 +248,38 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
         cost_usd,
         exit_code,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_mcp_config_temp_file;
+
+    #[tokio::test]
+    async fn writes_mcp_temp_file_with_expected_contents() {
+        let mcp_json = r#"{"mcpServers":{"example":{"command":"echo","env":{"TOKEN":"test"}}}}"#;
+        let path = write_mcp_config_temp_file(mcp_json)
+            .await
+            .expect("temp mcp config should be written");
+
+        let content = tokio::fs::read_to_string(&path)
+            .await
+            .expect("temp mcp config should be readable");
+        assert_eq!(content, mcp_json);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = tokio::fs::metadata(&path)
+                .await
+                .expect("temp mcp config metadata should be readable")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+
+        tokio::fs::remove_file(path)
+            .await
+            .expect("temp mcp config should be removable");
+    }
 }

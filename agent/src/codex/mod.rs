@@ -60,7 +60,9 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
     let full_prompt = if resuming {
         let mut p = opts.prompt.to_string();
         if !opts.image_paths.is_empty() {
-            let filenames: Vec<String> = opts.image_paths.iter()
+            let filenames: Vec<String> = opts
+                .image_paths
+                .iter()
                 .filter_map(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
                 .collect();
             p.push_str(&format!(
@@ -76,7 +78,9 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
         }
         let mut task_prompt = opts.prompt.to_string();
         if !opts.image_paths.is_empty() {
-            let filenames: Vec<String> = opts.image_paths.iter()
+            let filenames: Vec<String> = opts
+                .image_paths
+                .iter()
                 .filter_map(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
                 .collect();
             task_prompt.push_str(&format!(
@@ -100,9 +104,9 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
         "Invoking Codex CLI"
     );
 
-    let mut child = cmd
-        .spawn()
-        .context("Failed to spawn codex CLI — is it installed? Run: npm install -g @openai/codex")?;
+    let mut child = cmd.spawn().context(
+        "Failed to spawn codex CLI — is it installed? Run: npm install -g @openai/codex",
+    )?;
 
     // Write prompt to stdin then close
     if let Some(mut stdin) = child.stdin.take() {
@@ -154,10 +158,8 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
                     if let Some(tx) = &opts.event_tx {
                         match item_type {
                             "command_execution" => {
-                                let command = item
-                                    .get("command")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("");
+                                let command =
+                                    item.get("command").and_then(|v| v.as_str()).unwrap_or("");
                                 let summary = if command.len() > 120 {
                                     format!("{}…", &command[..120])
                                 } else {
@@ -194,10 +196,8 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
                                 }
                             }
                             "mcp_tool_call" if event_type == "item.started" => {
-                                let server = item
-                                    .get("server")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("mcp");
+                                let server =
+                                    item.get("server").and_then(|v| v.as_str()).unwrap_or("mcp");
                                 let tool = item
                                     .get("tool")
                                     .and_then(|v| v.as_str())
@@ -208,15 +208,11 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
                                 });
                             }
                             "agent_message" if event_type == "item.completed" => {
-                                let text = item
-                                    .get("text")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("");
+                                let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("");
                                 if !text.trim().is_empty() {
                                     last_agent_message = text.to_string();
                                     let truncated: String = text.trim().chars().take(300).collect();
-                                    let _ =
-                                        tx.send(StreamEvent::AssistantText(truncated));
+                                    let _ = tx.send(StreamEvent::AssistantText(truncated));
                                 }
                             }
                             _ => {}
@@ -236,10 +232,14 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
             // Token usage from turn completion
             "turn.completed" => {
                 if let Some(usage) = json.get("usage") {
-                    total_input_tokens +=
-                        usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                    total_output_tokens +=
-                        usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    total_input_tokens += usage
+                        .get("input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    total_output_tokens += usage
+                        .get("output_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
                 }
             }
             "turn.failed" => {

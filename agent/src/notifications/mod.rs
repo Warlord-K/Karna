@@ -2,9 +2,10 @@ use anyhow::Result;
 use tracing::{info, warn};
 
 use crate::config::Config;
+use crate::db::Database;
 use crate::models::AgentTask;
 
-pub async fn send_plan_ready(config: &Config, task: &AgentTask) -> Result<()> {
+pub async fn send_plan_ready(config: &Config, db: &Database, task: &AgentTask) -> Result<()> {
     let subject = format!("Plan ready: {}", task.title);
     let plan_preview = task
         .plan_content
@@ -29,10 +30,18 @@ pub async fn send_plan_ready(config: &Config, task: &AgentTask) -> Result<()> {
         None,
     );
 
-    send_email(config, &subject, &html).await
+    fanout_notification(
+        config,
+        db,
+        task,
+        &subject,
+        &html,
+        crate::slack::NotificationKind::PlanReady,
+    )
+    .await
 }
 
-pub async fn send_pr_opened(config: &Config, task: &AgentTask) -> Result<()> {
+pub async fn send_pr_opened(config: &Config, db: &Database, task: &AgentTask) -> Result<()> {
     let pr_url = task.pr_url.as_deref().unwrap_or("#");
     let subject = format!("PR opened: {}", task.title);
     let html = render_email(
@@ -44,10 +53,18 @@ pub async fn send_pr_opened(config: &Config, task: &AgentTask) -> Result<()> {
         Some((pr_url, "View Pull Request")),
     );
 
-    send_email(config, &subject, &html).await
+    fanout_notification(
+        config,
+        db,
+        task,
+        &subject,
+        &html,
+        crate::slack::NotificationKind::PrOpened,
+    )
+    .await
 }
 
-pub async fn send_task_failed(config: &Config, task: &AgentTask) -> Result<()> {
+pub async fn send_task_failed(config: &Config, db: &Database, task: &AgentTask) -> Result<()> {
     let error = task.error_message.as_deref().unwrap_or("Unknown error");
     let subject = format!("Agent failed: {}", task.title);
     let html = render_email(
@@ -65,10 +82,18 @@ pub async fn send_task_failed(config: &Config, task: &AgentTask) -> Result<()> {
         None,
     );
 
-    send_email(config, &subject, &html).await
+    fanout_notification(
+        config,
+        db,
+        task,
+        &subject,
+        &html,
+        crate::slack::NotificationKind::TaskFailed,
+    )
+    .await
 }
 
-pub async fn send_task_done(config: &Config, task: &AgentTask) -> Result<()> {
+pub async fn send_task_done(config: &Config, db: &Database, task: &AgentTask) -> Result<()> {
     let pr_url = task.pr_url.as_deref().unwrap_or("#");
     let subject = format!("Task completed: {}", task.title);
     let html = render_email(
@@ -80,7 +105,68 @@ pub async fn send_task_done(config: &Config, task: &AgentTask) -> Result<()> {
         Some((pr_url, "View Pull Request")),
     );
 
-    send_email(config, &subject, &html).await
+    fanout_notification(
+        config,
+        db,
+        task,
+        &subject,
+        &html,
+        crate::slack::NotificationKind::TaskDone,
+    )
+    .await
+}
+
+pub async fn send_non_code_output(
+    config: &Config,
+    db: &Database,
+    task: &AgentTask,
+    artifact_markdown: &str,
+    output_ref: Option<&str>,
+) -> Result<()> {
+    let subject = format!("Task completed: {}", task.title);
+    let preview = artifact_markdown.chars().take(700).collect::<String>();
+    let body = format!(
+        r#"<p style="margin:0 0 12px;color:#d1d5db;font-size:14px;">The non-code task completed and produced an artifact.</p>
+        <div style="background:#1e1e2e;border:1px solid #374151;border-radius:6px;padding:12px 16px;margin-top:8px;">
+            <p style="margin:0;color:#9ca3af;font-size:13px;font-family:'SFMono-Regular',Consolas,monospace;white-space:pre-wrap;word-break:break-word;">{}</p>
+        </div>"#,
+        html_escape(&preview),
+    );
+    let cta = output_ref.map(|r| (r, "View Artifact"));
+    let html = render_email(
+        "Task Completed",
+        "#22c55e",
+        &task.title,
+        task.repo.as_deref().unwrap_or("(no repository)"),
+        &body,
+        cta,
+    );
+    fanout_notification(
+        config,
+        db,
+        task,
+        &subject,
+        &html,
+        crate::slack::NotificationKind::TaskDone,
+    )
+    .await
+}
+
+async fn fanout_notification(
+    config: &Config,
+    db: &Database,
+    task: &AgentTask,
+    subject: &str,
+    html: &str,
+    slack_kind: crate::slack::NotificationKind,
+) -> Result<()> {
+    if let Err(e) = send_email(config, subject, html).await {
+        warn!(error = %e, subject, task_id = %task.id, "Email notification failed");
+    }
+    if let Err(e) = crate::slack::send_task_notification(config, db, task, slack_kind).await {
+        warn!(error = %e, subject, task_id = %task.id, "Slack notification failed");
+    }
+    Ok(())
 }
 
 fn html_escape(s: &str) -> String {

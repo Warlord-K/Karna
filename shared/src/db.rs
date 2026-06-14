@@ -5,7 +5,16 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::cache;
-use crate::models::{AgentLog, AgentProfile, AgentTask, Policy, PrReview, PrReviewFinding, PrReviewLog, RepoProfile, Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment};
+use crate::models::{
+    AgentLog, AgentProfile, AgentTask, Policy, PrReview, PrReviewFinding, PrReviewLog, RepoProfile,
+    Schedule, ScheduledRun, ScheduledRunLog, TaskAttachment,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogCursor {
+    pub created_at: DateTime<Utc>,
+    pub id: Uuid,
+}
 
 #[derive(Clone)]
 pub struct Database {
@@ -23,7 +32,11 @@ impl Database {
             .max_connections(10)
             .connect(url)
             .await?;
-        Ok(Self { pool, redis: None, shared_workspace: false })
+        Ok(Self {
+            pool,
+            redis: None,
+            shared_workspace: false,
+        })
     }
 
     /// Attach a Redis client so writes automatically invalidate cache keys.
@@ -97,6 +110,7 @@ impl Database {
                AND NOT EXISTS (
                  SELECT 1 FROM agent_tasks sub WHERE sub.parent_task_id = t.id
                )
+               AND (t.not_before IS NULL OR t.not_before <= now())
                ORDER BY
                  CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
                  t.created_at ASC
@@ -149,12 +163,10 @@ impl Database {
     }
 
     pub async fn get_task(&self, id: Uuid) -> Result<Option<AgentTask>> {
-        let task = sqlx::query_as::<_, AgentTask>(
-            "SELECT * FROM agent_tasks WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let task = sqlx::query_as::<_, AgentTask>("SELECT * FROM agent_tasks WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(task)
     }
 
@@ -164,6 +176,7 @@ impl Database {
         if self.shared_workspace {
             let tasks = sqlx::query_as::<_, AgentTask>(
                 r#"SELECT * FROM agent_tasks
+                   WHERE source IS DISTINCT FROM 'chat'
                    ORDER BY
                      CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
                      created_at ASC"#,
@@ -175,10 +188,39 @@ impl Database {
         let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         let tasks = sqlx::query_as::<_, AgentTask>(
             r#"SELECT * FROM agent_tasks
-               WHERE user_id = $1 OR user_id = $2
+               WHERE (user_id = $1 OR user_id = $2)
+               AND source IS DISTINCT FROM 'chat'
                ORDER BY
                  CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
                  created_at ASC"#,
+        )
+        .bind(user_id)
+        .bind(default_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(tasks)
+    }
+
+    /// List conversational chat tasks (`source='chat'`) for a user.
+    /// In shared-workspace mode, returns all chat tasks.
+    pub async fn list_chats_for_user(&self, user_id: Uuid) -> Result<Vec<AgentTask>> {
+        if self.shared_workspace {
+            let tasks = sqlx::query_as::<_, AgentTask>(
+                r#"SELECT * FROM agent_tasks
+                   WHERE source = 'chat'
+                   ORDER BY created_at DESC"#,
+            )
+            .fetch_all(&self.pool)
+            .await?;
+            return Ok(tasks);
+        }
+
+        let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
+        let tasks = sqlx::query_as::<_, AgentTask>(
+            r#"SELECT * FROM agent_tasks
+               WHERE (user_id = $1 OR user_id = $2)
+               AND source = 'chat'
+               ORDER BY created_at DESC"#,
         )
         .bind(user_id)
         .bind(default_id)
@@ -200,8 +242,25 @@ impl Database {
         model: Option<&str>,
     ) -> Result<AgentTask> {
         self.create_task_full(
-            user_id, title, description, repo, priority, cli, model,
-            None, None, None, None, None,
+            user_id,
+            title,
+            description,
+            repo,
+            priority,
+            cli,
+            model,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
         .await
     }
@@ -222,14 +281,23 @@ impl Database {
         external_source: Option<&str>,
         external_id: Option<&str>,
         external_url: Option<&str>,
+        planner_agent_id: Option<Uuid>,
+        implementer_agent_id: Option<Uuid>,
+        reviewer_agent_id: Option<Uuid>,
+        kind: Option<&str>,
+        output_target: Option<&str>,
+        orchestrator: Option<&serde_json::Value>,
+        source: Option<&str>,
     ) -> Result<AgentTask> {
         let task = sqlx::query_as::<_, AgentTask>(
             r#"INSERT INTO agent_tasks (
                  user_id, title, description, repo, priority, position, cli, model,
                  assignee_user_id, assigned_agent_id,
-                 external_source, external_id, external_url
+                 external_source, external_id, external_url,
+                 planner_agent_id, implementer_agent_id, reviewer_agent_id,
+                 kind, output_target, orchestrator, source
                )
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
                RETURNING *"#,
         )
         .bind(user_id)
@@ -245,6 +313,13 @@ impl Database {
         .bind(external_source)
         .bind(external_id)
         .bind(external_url)
+        .bind(planner_agent_id)
+        .bind(implementer_agent_id)
+        .bind(reviewer_agent_id)
+        .bind(kind.unwrap_or("code"))
+        .bind(output_target.unwrap_or("none"))
+        .bind(orchestrator)
+        .bind(source)
         .fetch_one(&self.pool)
         .await?;
         self.bust_tasks(Some(task.id)).await;
@@ -259,11 +334,38 @@ impl Database {
         updates: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<u64> {
         let allowed = [
-            "title", "description", "repo", "target_branch", "status", "priority",
-            "position", "branch", "pr_url", "pr_number", "plan_content", "feedback",
-            "agent_session_id", "error_message", "cli", "model",
-            "assignee_user_id", "assigned_agent_id",
-            "external_source", "external_id", "external_url",
+            "title",
+            "description",
+            "repo",
+            "target_branch",
+            "status",
+            "priority",
+            "position",
+            "branch",
+            "pr_url",
+            "pr_number",
+            "plan_content",
+            "feedback",
+            "agent_session_id",
+            "error_message",
+            "cli",
+            "model",
+            "assignee_user_id",
+            "assigned_agent_id",
+            "planner_agent_id",
+            "implementer_agent_id",
+            "reviewer_agent_id",
+            "external_source",
+            "external_id",
+            "external_url",
+            "slack_channel",
+            "slack_thread_ts",
+            "kind",
+            "output_target",
+            "output_ref",
+            "not_before",
+            "orchestrator",
+            "source",
         ];
 
         let mut set_clauses = Vec::new();
@@ -272,7 +374,13 @@ impl Database {
 
         for (key, value) in updates {
             if allowed.contains(&key.as_str()) {
-                set_clauses.push(format!("\"{}\" = ${}", key, idx));
+                if key == "not_before" {
+                    set_clauses.push(format!("\"{}\" = ${}::timestamptz", key, idx));
+                } else if key == "orchestrator" {
+                    set_clauses.push(format!("\"{}\" = ${}::jsonb", key, idx));
+                } else {
+                    set_clauses.push(format!("\"{}\" = ${}", key, idx));
+                }
                 // Store as string for bind — sqlx text bind handles NULL
                 values.push(match value {
                     serde_json::Value::Null => String::new(),
@@ -336,14 +444,12 @@ impl Database {
                 .await?
         } else {
             let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
-            sqlx::query(
-                "DELETE FROM agent_tasks WHERE id = $1 AND (user_id = $2 OR user_id = $3)",
-            )
-            .bind(id)
-            .bind(user_id)
-            .bind(default_id)
-            .execute(&self.pool)
-            .await?
+            sqlx::query("DELETE FROM agent_tasks WHERE id = $1 AND (user_id = $2 OR user_id = $3)")
+                .bind(id)
+                .bind(user_id)
+                .bind(default_id)
+                .execute(&self.pool)
+                .await?
         };
         if result.rows_affected() > 0 {
             self.bust_tasks(Some(id)).await;
@@ -397,13 +503,11 @@ impl Database {
     }
 
     pub async fn set_error(&self, id: Uuid, error_message: &str) -> Result<()> {
-        sqlx::query(
-            "UPDATE agent_tasks SET error_message = $1, status = 'failed' WHERE id = $2",
-        )
-        .bind(error_message)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE agent_tasks SET error_message = $1, status = 'failed' WHERE id = $2")
+            .bind(error_message)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         self.bust_tasks(Some(id)).await;
         Ok(())
     }
@@ -441,12 +545,11 @@ impl Database {
     }
 
     pub async fn find_task_by_branch(&self, branch: &str) -> Result<Option<AgentTask>> {
-        let task = sqlx::query_as::<_, AgentTask>(
-            "SELECT * FROM agent_tasks WHERE branch = $1 LIMIT 1",
-        )
-        .bind(branch)
-        .fetch_optional(&self.pool)
-        .await?;
+        let task =
+            sqlx::query_as::<_, AgentTask>("SELECT * FROM agent_tasks WHERE branch = $1 LIMIT 1")
+                .bind(branch)
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(task)
     }
 
@@ -456,6 +559,45 @@ impl Database {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        self.bust_tasks(Some(id)).await;
+        Ok(())
+    }
+
+    pub async fn set_not_before(&self, id: Uuid, not_before: Option<DateTime<Utc>>) -> Result<()> {
+        sqlx::query("UPDATE agent_tasks SET not_before = $1 WHERE id = $2")
+            .bind(not_before)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        self.bust_tasks(Some(id)).await;
+        Ok(())
+    }
+
+    pub async fn count_logs_for_phase(&self, task_id: Uuid, phase: &str) -> Result<i64> {
+        let count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM agent_logs WHERE task_id = $1 AND phase = $2",
+        )
+        .bind(task_id)
+        .bind(phase)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count)
+    }
+
+    pub async fn set_task_slack_thread(
+        &self,
+        id: Uuid,
+        slack_channel: &str,
+        slack_thread_ts: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE agent_tasks SET slack_channel = $1, slack_thread_ts = $2 WHERE id = $3",
+        )
+        .bind(slack_channel)
+        .bind(slack_thread_ts)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
         self.bust_tasks(Some(id)).await;
         Ok(())
     }
@@ -473,6 +615,28 @@ impl Database {
         Ok(tasks)
     }
 
+    /// Done tasks that have not yet been processed by memory write-back.
+    /// Uses a marker log entry in `agent_logs` phase=`memory` to stay migration-free.
+    pub async fn done_tasks_pending_memory_writeback(&self, limit: i64) -> Result<Vec<AgentTask>> {
+        let tasks = sqlx::query_as::<_, AgentTask>(
+            r#"SELECT t.* FROM agent_tasks t
+               WHERE t.status = 'done'
+               AND t.repo IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM agent_logs l
+                   WHERE l.task_id = t.id
+                   AND l.phase = 'memory'
+                   AND l.message = 'Memory write-back complete'
+               )
+               ORDER BY t.updated_at ASC NULLS LAST
+               LIMIT $1"#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(tasks)
+    }
+
     // --- Subtask queries ---
 
     #[allow(clippy::too_many_arguments)]
@@ -482,14 +646,16 @@ impl Database {
         user_id: Uuid,
         title: &str,
         description: Option<&str>,
-        repo: &str,
+        repo: Option<&str>,
         priority: &str,
         cli: Option<&str>,
         model: Option<&str>,
+        kind: Option<&str>,
     ) -> Result<AgentTask> {
         let task = sqlx::query_as::<_, AgentTask>(
-            r#"INSERT INTO agent_tasks (user_id, parent_task_id, title, description, repo, priority, position, cli, model)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            r#"INSERT INTO agent_tasks
+                 (user_id, parent_task_id, title, description, repo, priority, position, cli, model, kind)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                RETURNING *"#,
         )
         .bind(user_id)
@@ -501,6 +667,7 @@ impl Database {
         .bind(Utc::now().timestamp_millis() as f64)
         .bind(cli)
         .bind(model)
+        .bind(kind.unwrap_or("code"))
         .fetch_one(&self.pool)
         .await?;
         self.bust_tasks(Some(parent_id)).await;
@@ -585,16 +752,44 @@ impl Database {
         Ok(logs)
     }
 
+    /// Get logs newer than a cursor, ordered oldest-first.
+    pub async fn get_logs_since(
+        &self,
+        task_id: Uuid,
+        cursor: Option<LogCursor>,
+        limit: i64,
+    ) -> Result<Vec<AgentLog>> {
+        let after_created_at = cursor.as_ref().map(|c| c.created_at);
+        let after_id = cursor.as_ref().map(|c| c.id);
+        let logs = sqlx::query_as::<_, AgentLog>(
+            r#"SELECT * FROM agent_logs
+               WHERE task_id = $1
+               AND (
+                 $2::timestamptz IS NULL
+                 OR created_at > $2
+                 OR (created_at = $2 AND id > $3)
+               )
+               ORDER BY created_at ASC, id ASC
+               LIMIT $4"#,
+        )
+        .bind(task_id)
+        .bind(after_created_at)
+        .bind(after_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(logs)
+    }
+
     /// Verify a task belongs to a user (or default system user). Returns true if it does.
     /// In shared-workspace mode, returns true whenever the task exists.
     pub async fn task_belongs_to_user(&self, task_id: Uuid, user_id: Uuid) -> Result<bool> {
         if self.shared_workspace {
-            let count = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM agent_tasks WHERE id = $1",
-            )
-            .bind(task_id)
-            .fetch_one(&self.pool)
-            .await?;
+            let count =
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_tasks WHERE id = $1")
+                    .bind(task_id)
+                    .fetch_one(&self.pool)
+                    .await?;
             return Ok(count > 0);
         }
         let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
@@ -612,11 +807,9 @@ impl Database {
     // --- Schedule queries ---
 
     pub async fn get_all_schedules(&self) -> Result<Vec<Schedule>> {
-        let rows = sqlx::query_as::<_, Schedule>(
-            "SELECT * FROM schedules ORDER BY created_at ASC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query_as::<_, Schedule>("SELECT * FROM schedules ORDER BY created_at ASC")
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows)
     }
 
@@ -624,11 +817,10 @@ impl Database {
     /// In shared-workspace mode, returns every schedule.
     pub async fn list_schedules_for_user(&self, user_id: Uuid) -> Result<Vec<Schedule>> {
         if self.shared_workspace {
-            let rows = sqlx::query_as::<_, Schedule>(
-                "SELECT * FROM schedules ORDER BY created_at ASC",
-            )
-            .fetch_all(&self.pool)
-            .await?;
+            let rows =
+                sqlx::query_as::<_, Schedule>("SELECT * FROM schedules ORDER BY created_at ASC")
+                    .fetch_all(&self.pool)
+                    .await?;
             return Ok(rows);
         }
         let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
@@ -643,12 +835,10 @@ impl Database {
     }
 
     pub async fn get_schedule(&self, id: Uuid) -> Result<Option<Schedule>> {
-        let row = sqlx::query_as::<_, Schedule>(
-            "SELECT * FROM schedules WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row = sqlx::query_as::<_, Schedule>("SELECT * FROM schedules WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row)
     }
 
@@ -715,7 +905,16 @@ impl Database {
         let mut timestamp_vals: Vec<Option<DateTime<Utc>>> = Vec::new();
         let mut array_vals: Vec<Option<Vec<String>>> = Vec::new();
 
-        let text_fields = ["name", "prompt", "repos", "cron_expression", "task_prefix", "priority", "cli", "model"];
+        let text_fields = [
+            "name",
+            "prompt",
+            "repos",
+            "cron_expression",
+            "task_prefix",
+            "priority",
+            "cli",
+            "model",
+        ];
         for field in &text_fields {
             if let Some(val) = obj.get(*field) {
                 set_parts.push(format!("\"{}\" = ${}", field, bind_idx));
@@ -816,14 +1015,12 @@ impl Database {
                 .await?
         } else {
             let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
-            sqlx::query(
-                "DELETE FROM schedules WHERE id = $1 AND (user_id = $2 OR user_id = $3)",
-            )
-            .bind(id)
-            .bind(user_id)
-            .bind(default_id)
-            .execute(&self.pool)
-            .await?
+            sqlx::query("DELETE FROM schedules WHERE id = $1 AND (user_id = $2 OR user_id = $3)")
+                .bind(id)
+                .bind(user_id)
+                .bind(default_id)
+                .execute(&self.pool)
+                .await?
         };
         if result.rows_affected() > 0 {
             self.bust_schedules(Some(id)).await;
@@ -834,12 +1031,11 @@ impl Database {
     /// Verify a schedule belongs to a user (or default user, or shared-workspace mode).
     pub async fn schedule_belongs_to_user(&self, id: Uuid, user_id: Uuid) -> Result<bool> {
         if self.shared_workspace {
-            let count = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM schedules WHERE id = $1",
-            )
-            .bind(id)
-            .fetch_one(&self.pool)
-            .await?;
+            let count =
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM schedules WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&self.pool)
+                    .await?;
             return Ok(count > 0);
         }
         let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
@@ -906,14 +1102,12 @@ impl Database {
     }
 
     pub async fn insert_run_log(&self, run_id: Uuid, level: &str, message: &str) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO scheduled_run_logs (run_id, level, message) VALUES ($1, $2, $3)",
-        )
-        .bind(run_id)
-        .bind(level)
-        .bind(message)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("INSERT INTO scheduled_run_logs (run_id, level, message) VALUES ($1, $2, $3)")
+            .bind(run_id)
+            .bind(level)
+            .bind(message)
+            .execute(&self.pool)
+            .await?;
         self.bust_schedule_run(run_id).await;
         Ok(())
     }
@@ -948,12 +1142,10 @@ impl Database {
     pub async fn max_prefix_number(&self, user_id: Uuid, prefix: &str) -> Result<i32> {
         let pattern = format!("{prefix}-%");
         let titles: Vec<String> = if self.shared_workspace {
-            sqlx::query_scalar(
-                r#"SELECT title FROM agent_tasks WHERE title LIKE $1"#,
-            )
-            .bind(&pattern)
-            .fetch_all(&self.pool)
-            .await?
+            sqlx::query_scalar(r#"SELECT title FROM agent_tasks WHERE title LIKE $1"#)
+                .bind(&pattern)
+                .fetch_all(&self.pool)
+                .await?
         } else {
             let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
             sqlx::query_scalar(
@@ -1014,21 +1206,19 @@ impl Database {
     // --- Repo profile queries ---
 
     pub async fn get_repo_profile(&self, repo: &str) -> Result<Option<RepoProfile>> {
-        let profile = sqlx::query_as::<_, RepoProfile>(
-            "SELECT * FROM repo_profiles WHERE repo = $1",
-        )
-        .bind(repo)
-        .fetch_optional(&self.pool)
-        .await?;
+        let profile =
+            sqlx::query_as::<_, RepoProfile>("SELECT * FROM repo_profiles WHERE repo = $1")
+                .bind(repo)
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(profile)
     }
 
     pub async fn get_all_repo_profiles(&self) -> Result<Vec<RepoProfile>> {
-        let profiles = sqlx::query_as::<_, RepoProfile>(
-            "SELECT * FROM repo_profiles ORDER BY repo ASC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let profiles =
+            sqlx::query_as::<_, RepoProfile>("SELECT * FROM repo_profiles ORDER BY repo ASC")
+                .fetch_all(&self.pool)
+                .await?;
         Ok(profiles)
     }
 
@@ -1041,7 +1231,12 @@ impl Database {
         Ok(profiles)
     }
 
-    pub async fn upsert_repo_profile(&self, user_id: Uuid, repo: &str, branch: &str) -> Result<RepoProfile> {
+    pub async fn upsert_repo_profile(
+        &self,
+        user_id: Uuid,
+        repo: &str,
+        branch: &str,
+    ) -> Result<RepoProfile> {
         let profile = sqlx::query_as::<_, RepoProfile>(
             r#"INSERT INTO repo_profiles (user_id, repo, branch, status)
                VALUES ($1, $2, $3, 'pending')
@@ -1119,13 +1314,11 @@ impl Database {
     }
 
     pub async fn set_repo_profile_error(&self, id: Uuid, error: &str) -> Result<()> {
-        sqlx::query(
-            "UPDATE repo_profiles SET status = 'failed', error_message = $1 WHERE id = $2",
-        )
-        .bind(error)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE repo_profiles SET status = 'failed', error_message = $1 WHERE id = $2")
+            .bind(error)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         self.bust_repos().await;
         Ok(())
     }
@@ -1154,7 +1347,11 @@ impl Database {
         Ok(())
     }
 
-    pub async fn find_task_by_github_issue(&self, repo: &str, issue_number: i32) -> Result<Option<AgentTask>> {
+    pub async fn find_task_by_github_issue(
+        &self,
+        repo: &str,
+        issue_number: i32,
+    ) -> Result<Option<AgentTask>> {
         let pattern = format!("GH-{}: %", issue_number);
         let task = sqlx::query_as::<_, AgentTask>(
             "SELECT * FROM agent_tasks WHERE repo = $1 AND title LIKE $2 LIMIT 1",
@@ -1167,12 +1364,11 @@ impl Database {
     }
 
     pub async fn get_repo_sync_issues(&self, repo: &str) -> Result<bool> {
-        let result = sqlx::query_scalar::<_, bool>(
-            "SELECT sync_issues FROM repo_profiles WHERE repo = $1",
-        )
-        .bind(repo)
-        .fetch_optional(&self.pool)
-        .await?;
+        let result =
+            sqlx::query_scalar::<_, bool>("SELECT sync_issues FROM repo_profiles WHERE repo = $1")
+                .bind(repo)
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(result.unwrap_or(true))
     }
 
@@ -1321,11 +1517,7 @@ impl Database {
     }
 
     /// Most recent reviews for a repo — for the eventual repo detail "Reviews" tab.
-    pub async fn list_pr_reviews_for_repo(
-        &self,
-        repo: &str,
-        limit: i64,
-    ) -> Result<Vec<PrReview>> {
+    pub async fn list_pr_reviews_for_repo(&self, repo: &str, limit: i64) -> Result<Vec<PrReview>> {
         let rows = sqlx::query_as::<_, PrReview>(
             r#"SELECT * FROM pr_reviews
                WHERE repo = $1
@@ -1340,12 +1532,10 @@ impl Database {
     }
 
     pub async fn get_pr_review(&self, id: Uuid) -> Result<Option<PrReview>> {
-        let row = sqlx::query_as::<_, PrReview>(
-            "SELECT * FROM pr_reviews WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row = sqlx::query_as::<_, PrReview>("SELECT * FROM pr_reviews WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row)
     }
 
@@ -1374,7 +1564,11 @@ impl Database {
         Ok(())
     }
 
-    pub async fn get_pr_review_logs(&self, review_id: Uuid, limit: i64) -> Result<Vec<PrReviewLog>> {
+    pub async fn get_pr_review_logs(
+        &self,
+        review_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<PrReviewLog>> {
         let rows = sqlx::query_as::<_, PrReviewLog>(
             r#"SELECT * FROM (
                  SELECT * FROM pr_review_logs WHERE review_id = $1
@@ -1459,7 +1653,11 @@ impl Database {
         Ok(())
     }
 
-    pub async fn get_schedule_runs(&self, schedule_id: Uuid, limit: i64) -> Result<Vec<ScheduledRun>> {
+    pub async fn get_schedule_runs(
+        &self,
+        schedule_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<ScheduledRun>> {
         let runs = sqlx::query_as::<_, ScheduledRun>(
             "SELECT * FROM scheduled_runs WHERE schedule_id = $1 ORDER BY started_at DESC LIMIT $2",
         )
@@ -1515,14 +1713,28 @@ impl Database {
         Ok(task)
     }
 
+    pub async fn find_task_by_slack_thread(
+        &self,
+        slack_channel: &str,
+        slack_thread_ts: &str,
+    ) -> Result<Option<AgentTask>> {
+        let task = sqlx::query_as::<_, AgentTask>(
+            "SELECT * FROM agent_tasks WHERE slack_channel = $1 AND slack_thread_ts = $2 LIMIT 1",
+        )
+        .bind(slack_channel)
+        .bind(slack_thread_ts)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(task)
+    }
+
     pub async fn first_user_id(&self) -> Result<Option<Uuid>> {
         let default_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
-        let exists = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)",
-        )
-        .bind(default_id)
-        .fetch_one(&self.pool)
-        .await?;
+        let exists =
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)")
+                .bind(default_id)
+                .fetch_one(&self.pool)
+                .await?;
         if exists {
             return Ok(Some(default_id));
         }
@@ -1533,12 +1745,10 @@ impl Database {
     }
 
     pub async fn schedule_exists_by_name(&self, name: &str) -> Result<bool> {
-        let count = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM schedules WHERE name = $1",
-        )
-        .bind(name)
-        .fetch_one(&self.pool)
-        .await?;
+        let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM schedules WHERE name = $1")
+            .bind(name)
+            .fetch_one(&self.pool)
+            .await?;
         Ok(count > 0)
     }
 
@@ -1554,12 +1764,10 @@ impl Database {
     }
 
     pub async fn get_agent_profile(&self, id: Uuid) -> Result<Option<AgentProfile>> {
-        let row = sqlx::query_as::<_, AgentProfile>(
-            "SELECT * FROM agent_profiles WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row = sqlx::query_as::<_, AgentProfile>("SELECT * FROM agent_profiles WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row)
     }
 
@@ -1594,12 +1802,10 @@ impl Database {
             return Ok(row);
         }
 
-        let row = sqlx::query_as::<_, AgentProfile>(
-            "SELECT * FROM agent_profiles WHERE slug = $1",
-        )
-        .bind(slug)
-        .fetch_one(&self.pool)
-        .await?;
+        let row = sqlx::query_as::<_, AgentProfile>("SELECT * FROM agent_profiles WHERE slug = $1")
+            .bind(slug)
+            .fetch_one(&self.pool)
+            .await?;
         Ok(row)
     }
 
@@ -1632,11 +1838,7 @@ impl Database {
     }
 
     /// Update mutable fields on an agent profile. Whitelisted fields only.
-    pub async fn update_agent_profile(
-        &self,
-        id: Uuid,
-        updates: &serde_json::Value,
-    ) -> Result<u64> {
+    pub async fn update_agent_profile(&self, id: Uuid, updates: &serde_json::Value) -> Result<u64> {
         let obj = match updates.as_object() {
             Some(o) => o,
             None => return Ok(0),
@@ -1723,12 +1925,11 @@ impl Database {
         .fetch_one(&self.pool)
         .await?;
 
-        let reviews: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM pr_reviews WHERE reviewer_agent_id = $1",
-        )
-        .bind(id)
-        .fetch_one(&self.pool)
-        .await?;
+        let reviews: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM pr_reviews WHERE reviewer_agent_id = $1")
+                .bind(id)
+                .fetch_one(&self.pool)
+                .await?;
 
         Ok((total, open, prs, reviews, cost))
     }
@@ -1799,11 +2000,9 @@ impl Database {
 
     /// Only enabled policies — used by the planner's policy scan.
     pub async fn list_active_policies(&self) -> Result<Vec<Policy>> {
-        let rows = sqlx::query_as::<_, Policy>(
-            "SELECT * FROM policies WHERE enabled = TRUE",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query_as::<_, Policy>("SELECT * FROM policies WHERE enabled = TRUE")
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows)
     }
 
@@ -1832,11 +2031,7 @@ impl Database {
         Ok(row)
     }
 
-    pub async fn update_policy(
-        &self,
-        id: Uuid,
-        updates: &serde_json::Value,
-    ) -> Result<u64> {
+    pub async fn update_policy(&self, id: Uuid, updates: &serde_json::Value) -> Result<u64> {
         let obj = match updates.as_object() {
             Some(o) => o,
             None => return Ok(0),

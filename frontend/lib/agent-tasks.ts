@@ -1,6 +1,23 @@
 // Types
 export type AgentTaskStatus = 'todo' | 'planning' | 'plan_review' | 'in_progress' | 'review' | 'done' | 'failed' | 'cancelled';
 export type AgentTaskPriority = 'low' | 'medium' | 'high' | 'urgent';
+export type AgentTaskKind = 'code' | 'doc' | 'research' | 'ops';
+export type AgentTaskOutputTarget =
+  | 'pr'
+  | 'linear_comment'
+  | 'linear_doc'
+  | 'slack_message'
+  | 'notification'
+  | 'none';
+
+export interface OrchestratorConfig {
+  allowed_tools: string[];
+  max_turns: number;
+  deadline: string | null;
+  max_actions_per_turn: number;
+  max_subtasks: number;
+  accepts_external_replies: boolean;
+}
 
 export interface TaskAttachment {
   id: string;
@@ -20,6 +37,10 @@ export interface AgentTask {
   title: string;
   description: string | null;
   repo: string | null;
+  kind: AgentTaskKind;
+  output_target: AgentTaskOutputTarget | null;
+  output_ref: string | null;
+  source: string | null;
   target_branch: string;
   status: AgentTaskStatus;
   priority: AgentTaskPriority;
@@ -29,6 +50,7 @@ export interface AgentTask {
   pr_number: number | null;
   plan_content: string | null;
   feedback: string | null;
+  not_before: string | null;
   agent_session_id: string | null;
   error_message: string | null;
   cli: string | null;
@@ -37,6 +59,11 @@ export interface AgentTask {
   parent_task_id: string | null;
   /** Agent profile UUID. NULL = any active agent profile picks it up. */
   assigned_agent_id: string | null;
+  /** Per-stage agent profile overrides. NULL falls back to assigned_agent_id then default. */
+  planner_agent_id: string | null;
+  implementer_agent_id: string | null;
+  reviewer_agent_id: string | null;
+  orchestrator: OrchestratorConfig | null;
   /** Policies that fired against this task's plan (set after planner finishes). */
   policy_matches: import('./policies').PolicyMatch[] | null;
   /** "linear" | "clickup" — origin of an ingested task. */
@@ -71,6 +98,24 @@ export interface AgentLog {
   log_type: 'info' | 'error' | 'command' | 'output' | 'claude' | 'tool' | 'comment';
   metadata: Record<string, unknown> | null;
   created_at: string;
+}
+
+export function encodeLogCursor(
+  log: Pick<AgentLog, 'created_at' | 'id'> | null | undefined,
+): string | null {
+  if (!log?.created_at || !log.id) return null;
+  const createdAt = new Date(log.created_at);
+  if (Number.isNaN(createdAt.getTime())) return null;
+  return `${createdAt.toISOString()}|${log.id}`;
+}
+
+export function buildLogStreamUrl(taskId: string, after?: string | null): string {
+  const params = new URLSearchParams();
+  if (after) params.set('after', after);
+  const query = params.toString();
+  return query
+    ? `${API_BASE}/${taskId}/logs/stream?${query}`
+    : `${API_BASE}/${taskId}/logs/stream`;
 }
 
 // Column configuration
@@ -139,8 +184,13 @@ export async function createTask(data: {
   priority: AgentTaskPriority;
   cli: string | null;
   model: string | null;
+  kind?: AgentTaskKind;
+  output_target?: AgentTaskOutputTarget;
   assignee_user_id?: string | null;
   assigned_agent_id?: string | null;
+  planner_agent_id?: string | null;
+  implementer_agent_id?: string | null;
+  reviewer_agent_id?: string | null;
 }): Promise<AgentTask> {
   const res = await fetch(API_BASE, {
     method: 'POST',
@@ -296,8 +346,13 @@ export async function createTaskWithImages(
     priority: AgentTaskPriority;
     cli: string | null;
     model: string | null;
+    kind?: AgentTaskKind;
+    output_target?: AgentTaskOutputTarget;
     assignee_user_id?: string | null;
     assigned_agent_id?: string | null;
+    planner_agent_id?: string | null;
+    implementer_agent_id?: string | null;
+    reviewer_agent_id?: string | null;
   },
   images: File[],
 ): Promise<AgentTask> {

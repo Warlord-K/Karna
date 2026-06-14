@@ -1,9 +1,4 @@
-use axum::{
-    extract::Request,
-    http::StatusCode,
-    middleware::Next,
-    response::Response,
-};
+use axum::{extract::Request, http::StatusCode, middleware::Next, response::Response};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use uuid::Uuid;
 
@@ -170,8 +165,8 @@ fn decrypt_jwe(token: &str, secret: &str, salt: &str) -> anyhow::Result<Vec<u8>>
     let aad = header_b64.as_bytes();
     let al = (aad.len() as u64 * 8).to_be_bytes();
 
-    let mut hmac = Hmac::<Sha512>::new_from_slice(mac_key)
-        .map_err(|_| anyhow::anyhow!("HMAC init failed"))?;
+    let mut hmac =
+        Hmac::<Sha512>::new_from_slice(mac_key).map_err(|_| anyhow::anyhow!("HMAC init failed"))?;
     hmac.update(aad);
     hmac.update(&iv);
     hmac.update(&ciphertext);

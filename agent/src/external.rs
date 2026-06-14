@@ -12,21 +12,30 @@ const LINEAR_GRAPHQL_URL: &str = "https://api.linear.app/graphql";
 /// Called by the implementer right after a PR is opened. If the task came from
 /// an external source we mirror the PR URL back as a comment over there.
 pub async fn notify_pr_opened(task: &AgentTask, pr_url: &str) {
-    let Some(source) = task.external_source.as_deref() else { return };
-    let Some(external_id) = task.external_id.as_deref() else { return };
+    let Some(source) = task.external_source.as_deref() else {
+        return;
+    };
+    let Some(external_id) = task.external_id.as_deref() else {
+        return;
+    };
 
     let result = match source {
         "linear" => post_linear_comment(external_id, pr_url).await,
         "clickup" => post_clickup_comment(external_id, pr_url).await,
         other => {
-            warn!(source = other, "Unknown external_source, skipping PR backlink");
+            warn!(
+                source = other,
+                "Unknown external_source, skipping PR backlink"
+            );
             return;
         }
     };
 
     match result {
         Ok(true) => info!(task_id = %task.id, source, "PR backlink posted to external task"),
-        Ok(false) => info!(task_id = %task.id, source, "No API token configured, skipping backlink"),
+        Ok(false) => {
+            info!(task_id = %task.id, source, "No API token configured, skipping backlink")
+        }
         Err(e) => warn!(task_id = %task.id, source, error = %e, "Failed to post PR backlink"),
     }
 }

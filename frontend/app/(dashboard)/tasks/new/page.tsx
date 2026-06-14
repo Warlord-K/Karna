@@ -4,7 +4,14 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { useAuthDisabled } from '@/lib/auth-context';
-import { AgentTaskPriority, UserSummary, userDisplayName, createTaskWithImages } from '@/lib/agent-tasks';
+import {
+  AgentTaskKind,
+  AgentTaskOutputTarget,
+  AgentTaskPriority,
+  UserSummary,
+  userDisplayName,
+  createTaskWithImages,
+} from '@/lib/agent-tasks';
 import { useConfig, useUsers, useAgents, taskKeys } from '@/hooks/use-tasks';
 import { useQueryClient } from '@tanstack/react-query';
 import { MarkdownEditor, MarkdownEditorRef } from '@/components/agent/markdown-editor';
@@ -22,6 +29,21 @@ const PRIORITIES: { value: AgentTaskPriority; label: string; color: string }[] =
   { value: 'high',   label: 'High',   color: '#e5734e' },
   { value: 'medium', label: 'Medium', color: '#e5a94e' },
   { value: 'low',    label: 'Low',    color: '#7a7a85' },
+];
+
+const TASK_KINDS: { value: AgentTaskKind; label: string }[] = [
+  { value: 'code', label: 'Code' },
+  { value: 'doc', label: 'Doc' },
+  { value: 'research', label: 'Research' },
+  { value: 'ops', label: 'Ops' },
+];
+
+const OUTPUT_TARGETS: { value: AgentTaskOutputTarget; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'notification', label: 'Notification' },
+  { value: 'linear_comment', label: 'Linear comment' },
+  { value: 'linear_doc', label: 'Linear doc' },
+  { value: 'slack_message', label: 'Slack message' },
 ];
 
 export default function NewTaskPage() {
@@ -44,12 +66,19 @@ export default function NewTaskPage() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [repo, setRepo] = useState<string>('');
+  const [taskKind, setTaskKind] = useState<AgentTaskKind>('code');
+  const [outputTarget, setOutputTarget] = useState<AgentTaskOutputTarget>('none');
   const [priority, setPriority] = useState<AgentTaskPriority>('medium');
   const [cli, setCli] = useState(defaultCli);
   const [model, setModel] = useState(defaultModel);
   // Encoded picker value: "" = any agent, "agent:<id>" = specific agent profile,
   // "user:<id>" = human assignee.
   const [assignee, setAssignee] = useState<string>('');
+  // Per-stage agent profile overrides ("" = same as assigned/default).
+  const [plannerAgent, setPlannerAgent] = useState<string>('');
+  const [implementerAgent, setImplementerAgent] = useState<string>('');
+  const [reviewerAgent, setReviewerAgent] = useState<string>('');
+  const [showStages, setShowStages] = useState(false);
   const [loading, setLoading] = useState(false);
   const [images, setImages] = useState<File[]>([]);
   const editorRef = useRef<MarkdownEditorRef>(null);
@@ -66,6 +95,16 @@ export default function NewTaskPage() {
       setCli(backendNames[0]);
     }
   }, [backendNames, cli]);
+
+  useEffect(() => {
+    if (taskKind === 'code') return;
+    // Non-code tasks should not carry repo or per-stage code-flow overrides.
+    setRepo('');
+    setPlannerAgent('');
+    setImplementerAgent('');
+    setReviewerAgent('');
+    setShowStages(false);
+  }, [taskKind]);
 
   const addImages = useCallback((files: File[]) => {
     const valid = files.filter(f => {
@@ -103,12 +142,17 @@ export default function NewTaskPage() {
         {
           title: title.trim(),
           description: desc.trim(),
-          repo: repo || null,
+          repo: taskKind === 'code' ? repo || null : null,
           priority,
           cli,
           model,
+          kind: taskKind,
+          output_target: taskKind === 'code' ? 'none' : outputTarget,
           assignee_user_id: kind === 'user' ? id : null,
           assigned_agent_id: kind === 'agent' ? id : null,
+          planner_agent_id: taskKind === 'code' ? plannerAgent || null : null,
+          implementer_agent_id: taskKind === 'code' ? implementerAgent || null : null,
+          reviewer_agent_id: taskKind === 'code' ? reviewerAgent || null : null,
         },
         images,
       );
@@ -285,20 +329,56 @@ export default function NewTaskPage() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              <div>
+                <label className={labelClass}>Kind</label>
+                <div className="relative">
+                  <select value={taskKind} onChange={(e) => setTaskKind(e.target.value as AgentTaskKind)} className={selectClass}>
+                    {TASK_KINDS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                  </select>
+                  <CaretDown size={14} weight="bold" className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-7 pointer-events-none" />
+                </div>
+              </div>
+
+              {taskKind !== 'code' && (
+                <div>
+                  <label className={labelClass}>Output target</label>
+                  <div className="relative">
+                    <select
+                      value={outputTarget}
+                      onChange={(e) => setOutputTarget(e.target.value as AgentTaskOutputTarget)}
+                      className={selectClass}
+                    >
+                      {OUTPUT_TARGETS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                    </select>
+                    <CaretDown size={14} weight="bold" className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-7 pointer-events-none" />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mt-5">
               {/* Repository */}
               <div>
                 <label className={labelClass}>Repository</label>
                 <div className="relative">
-                  <select value={repo} onChange={(e) => setRepo(e.target.value)} className={selectClass}>
+                  <select
+                    value={repo}
+                    onChange={(e) => setRepo(e.target.value)}
+                    className={selectClass}
+                    disabled={taskKind !== 'code'}
+                  >
                     <option value="">Multi-repo (auto-detect)</option>
                     {repos.map((r) => <option key={r} value={r}>{r}</option>)}
                   </select>
                   <CaretDown size={14} weight="bold" className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-7 pointer-events-none" />
                 </div>
-                {!repo && (
+                {taskKind === 'code' && !repo && (
                   <p className="text-[11px] text-gray-7 mt-1.5 flex items-center gap-1">
                     <Stack size={11} weight="bold" /> Agent decides which repos need changes
                   </p>
+                )}
+                {taskKind !== 'code' && (
+                  <p className="text-[11px] text-gray-7 mt-1.5">Non-code tasks run without git worktrees or PRs.</p>
                 )}
               </div>
 
@@ -348,6 +428,54 @@ export default function NewTaskPage() {
                     {currentModels.map((m) => <option key={m} value={m} />)}
                   </datalist>
                 </div>
+              </div>
+            )}
+
+            {/* Per-stage agents (advanced) — run scope / implement / review on
+                different agent profiles. Empty = use the assigned agent / default. */}
+            {taskKind === 'code' && agents.length > 0 && (
+              <div className="mt-5">
+                <button
+                  type="button"
+                  onClick={() => setShowStages((v) => !v)}
+                  className="flex items-center gap-1.5 text-[12px] font-medium text-gray-8 hover:text-gray-11 uppercase tracking-wider transition-colors"
+                >
+                  <CaretDown
+                    size={13}
+                    weight="bold"
+                    className={`transition-transform ${showStages ? 'rotate-0' : '-rotate-90'}`}
+                  />
+                  Per-stage agents
+                </button>
+                {showStages && (
+                  <>
+                    <p className="text-[11px] text-gray-7 mt-2 mb-3">
+                      Run each stage on a different agent profile (e.g. plan with one, implement with another, self-review with a third). Leave on &ldquo;Same as assigned&rdquo; to use the task&rsquo;s agent.
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      {([
+                        ['Planner', plannerAgent, setPlannerAgent],
+                        ['Implementer', implementerAgent, setImplementerAgent],
+                        ['Reviewer', reviewerAgent, setReviewerAgent],
+                      ] as const).map(([label, value, setter]) => (
+                        <div key={label}>
+                          <label className={labelClass}>{label}</label>
+                          <div className="relative">
+                            <select value={value} onChange={(e) => setter(e.target.value)} className={selectClass}>
+                              <option value="">Same as assigned</option>
+                              {agents.map((a) => (
+                                <option key={a.id} value={a.id} disabled={!!a.paused_reason}>
+                                  {a.avatar_emoji} {a.name}{a.paused_reason ? ' (paused)' : ''}
+                                </option>
+                              ))}
+                            </select>
+                            <CaretDown size={14} weight="bold" className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-7 pointer-events-none" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>

@@ -44,7 +44,11 @@ pub async fn add(
 
     let profile = state
         .db
-        .upsert_repo_profile(user.0, body.repo.trim(), body.branch.as_deref().unwrap_or("main"))
+        .upsert_repo_profile(
+            user.0,
+            body.repo.trim(),
+            body.branch.as_deref().unwrap_or("main"),
+        )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -132,7 +136,9 @@ pub async fn trigger_webhook_register(
         .set_repo_webhook_status(id, "not_registered", None, None)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(json!({ "ok": true, "message": "Webhook re-registration queued" })))
+    Ok(Json(
+        json!({ "ok": true, "message": "Webhook re-registration queued" }),
+    ))
 }
 
 pub async fn list_reviews(
@@ -168,7 +174,14 @@ pub async fn review_logs(
 ) -> Result<Json<Vec<karna_shared::models::PrReviewLog>>, StatusCode> {
     // Ownership scope: the review must exist. We don't tie it back to the
     // repo_id beyond URL routing — the review row carries the repo string.
-    if state.db.get_pr_review(review_id).await.ok().flatten().is_none() {
+    if state
+        .db
+        .get_pr_review(review_id)
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
         return Err(StatusCode::NOT_FOUND);
     }
 
@@ -187,7 +200,14 @@ pub async fn review_findings(
     Extension(_user): Extension<UserId>,
     Path((_repo_id, review_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Vec<karna_shared::models::PrReviewFinding>>, StatusCode> {
-    if state.db.get_pr_review(review_id).await.ok().flatten().is_none() {
+    if state
+        .db
+        .get_pr_review(review_id)
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
         return Err(StatusCode::NOT_FOUND);
     }
     let db = state.db.clone();

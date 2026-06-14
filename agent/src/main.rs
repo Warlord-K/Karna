@@ -8,19 +8,24 @@ mod api;
 mod claude;
 mod cli;
 mod codex;
-mod opencode;
 mod config;
+mod cursor;
 mod db;
 mod external;
 mod git;
+mod grok;
+mod memory;
 mod models;
 mod notifications;
 mod onboarding;
+mod opencode;
 mod policies;
+mod preflight;
 mod profiles;
 mod queue;
 mod reviewer;
 mod scheduler;
+mod slack;
 mod updater;
 
 /// Exit code indicating the agent needs a rebuild (code changes detected).
@@ -70,12 +75,15 @@ async fn main() -> anyhow::Result<()> {
         warn!(error = %e, "Failed to write opencode MCP config");
     }
 
+    // Preflight: warn early if a configured backend CLI is missing or not
+    // logged in. Subscription backends (claude/cursor/grok/codex) authenticate
+    // via the host's login, inherited when the agent runs locally.
+    preflight::check_backends(&config).await;
+
     // Connect to Redis (first, so we can attach it to Database)
     let redis = redis::Client::open(config.redis_url.as_str())?;
     let mut conn = redis.get_multiplexed_async_connection().await?;
-    redis::cmd("PING")
-        .query_async::<String>(&mut conn)
-        .await?;
+    redis::cmd("PING").query_async::<String>(&mut conn).await?;
     info!("Connected to Redis");
 
     // Connect to Postgres with cache invalidation wired up.
@@ -85,7 +93,12 @@ async fn main() -> anyhow::Result<()> {
     // queries that use user-scoped filters. Keep it consistent with the API.
     let shared_workspace = std::env::var("KARNA_SHARED_WORKSPACE")
         .ok()
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(false);
     let db = db::Database::connect(&config.database_url)
         .await?
@@ -132,6 +145,9 @@ async fn main() -> anyhow::Result<()> {
     let api_db = db.clone();
     let api_handle = tokio::spawn(api::serve(api_config, api_db, api_shutdown_rx));
 
+    // Optional Slack Socket Mode control plane (inbound commands + steering).
+    slack::spawn_socket_mode(config.clone(), db.clone());
+
     // In production on Render free tier, self-ping to prevent spin-down.
     // Render sets RENDER_EXTERNAL_URL automatically on web services.
     if let Ok(external_url) = std::env::var("RENDER_EXTERNAL_URL") {
@@ -177,8 +193,8 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Track config file mtime for hot-reload
-    let config_path = std::env::var("CONFIG_PATH")
-        .unwrap_or_else(|_| "/etc/karna/config.yaml".to_string());
+    let config_path =
+        std::env::var("CONFIG_PATH").unwrap_or_else(|_| "/etc/karna/config.yaml".to_string());
     let mut last_config_mtime: Option<SystemTime> = std::fs::metadata(&config_path)
         .ok()
         .and_then(|m| m.modified().ok());
@@ -260,7 +276,9 @@ async fn main() -> anyhow::Result<()> {
                             info!(change_type = ?change, "Self-repo update detected");
                             if change.needs_rebuild() {
                                 info!("Code changes detected — initiating graceful shutdown for rebuild");
-                                if let Err(e) = updater::pull_self_repo(&repo_path, &self_repo.branch).await {
+                                if let Err(e) =
+                                    updater::pull_self_repo(&repo_path, &self_repo.branch).await
+                                {
                                     warn!(error = %e, "Failed to pull self-repo (restart loop may occur)");
                                 }
                                 needs_rebuild = true;

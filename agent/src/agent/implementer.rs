@@ -1,18 +1,30 @@
 use anyhow::Result;
 use tracing::info;
+use uuid::Uuid;
 
 use crate::cli::{self, CliOptions};
 use crate::config::Config;
 use crate::db::Database;
 use crate::external;
 use crate::git::{github, workspace};
+use crate::memory::{
+    agent_namespace, build_memory_section, dedupe_snippets, profile_slug, repo_namespace,
+    MemoryClient, MemorySnippet,
+};
 use crate::models::AgentTask;
 
-use super::planner::{discover_all_extensions, append_skills_to_prompt};
+use super::planner::{append_skills_to_prompt, discover_all_extensions};
 
 pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) -> Result<()> {
     info!(task_id = %task.id, "Starting implementation");
-    db.insert_log(task.id, "implement", &format!("Starting implementation for: {}", task.title), "info", None).await?;
+    db.insert_log(
+        task.id,
+        "implement",
+        &format!("Starting implementation for: {}", task.title),
+        "info",
+        None,
+    )
+    .await?;
 
     let branch_name = task.agent_branch_name();
 
@@ -27,11 +39,15 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
             .map(|r| r.branch.as_str())
             .unwrap_or(task.target_branch_or_default());
 
-        let repo_path = workspace::ensure_cloned(&config.repos_dir, repo_url, &config.github_token).await?;
+        let repo_path =
+            workspace::ensure_cloned(&config.repos_dir, repo_url, &config.github_token).await?;
         workspace::checkout_and_pull(&repo_path, base_branch).await?;
 
         let repo_name = repo_url.rsplit('/').next().unwrap_or(repo_ref);
-        let worktree_path = config.workspaces_dir.join(task.id.to_string()).join(repo_name);
+        let worktree_path = config
+            .workspaces_dir
+            .join(task.id.to_string())
+            .join(repo_name);
 
         workspace::create_worktree(&repo_path, &worktree_path, &branch_name, base_branch).await?;
 
@@ -61,7 +77,14 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
             }
             image_paths.push(path);
         }
-        db.insert_log(task.id, "implement", &format!("Loaded {} image attachment(s)", attachments.len()), "info", None).await?;
+        db.insert_log(
+            task.id,
+            "implement",
+            &format!("Loaded {} image attachment(s)", attachments.len()),
+            "info",
+            None,
+        )
+        .await?;
     }
 
     let images_section = if !attachments.is_empty() {
@@ -70,7 +93,10 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
         String::new()
     };
 
-    let description = task.description.as_deref().unwrap_or("No description provided.");
+    let description = task
+        .description
+        .as_deref()
+        .unwrap_or("No description provided.");
     let plan = task.plan_content.as_deref().unwrap_or("No plan available.");
 
     let feedback_section = if let Some(feedback) = &task.feedback {
@@ -92,40 +118,204 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
 
     // 4. Run CLI backend (Claude Code or Codex)
     let mcp_json_str = merged_mcp.map(|v| v.to_string());
-    let (cli_name, model, addendum) = super::resolve_runtime(db, task, config).await;
-    let system_prompt = super::merge_system_prompt(config.instructions.as_deref(), addendum.as_deref());
+    let (cli_name, model, addendum) =
+        super::resolve_runtime(db, task, config, super::Stage::Implement).await;
+    let system_prompt =
+        super::merge_system_prompt(config.instructions.as_deref(), addendum.as_deref());
+    let memory_query = format!(
+        "{title}\n\n{description}\n\n{plan}",
+        title = task.title,
+        plan = plan.chars().take(1_000).collect::<String>(),
+    );
+    inject_memory_section(
+        config,
+        db,
+        task.id,
+        "implement",
+        &mut prompt,
+        &memory_query,
+        &repo_refs,
+        &cli_name,
+        &model,
+    )
+    .await?;
 
-    db.insert_log(task.id, "implement", &format!("Invoking {cli_name} ({model}) for implementation"), "command", None).await?;
+    db.insert_log(
+        task.id,
+        "implement",
+        &format!("Invoking {cli_name} ({model}) for implementation"),
+        "command",
+        None,
+    )
+    .await?;
 
     let event_tx = super::spawn_log_consumer(db.clone(), task.id, "implement");
 
-    let result = cli::run(&cli_name, CliOptions {
-        working_dir,
-        prompt: &prompt,
-        system_prompt: system_prompt.as_deref(),
-        allowed_tools: Some("Read,Write,Edit,Glob,Grep,Bash"),
-        max_turns: config.max_turns,
-        model: &model,
-        mcp_config_json: mcp_json_str,
-        session_id: None,
-        resume: false,
-        event_tx: Some(event_tx),
-        image_paths: image_paths.clone(),
-    })
+    let result = cli::run(
+        &cli_name,
+        CliOptions {
+            working_dir,
+            prompt: &prompt,
+            system_prompt: system_prompt.as_deref(),
+            allowed_tools: Some("Read,Write,Edit,Glob,Grep,Bash"),
+            max_turns: config.max_turns,
+            model: &model,
+            mcp_config_json: mcp_json_str.clone(),
+            session_id: None,
+            resume: false,
+            event_tx: Some(event_tx),
+            image_paths: image_paths.clone(),
+        },
+    )
     .await?;
 
-    // Clean up temp image files
+    db.add_cost(task.id, result.cost_usd).await?;
+
+    let mut session_id = result.session_id.clone();
+    if let Some(sid) = &session_id {
+        db.set_session_id(task.id, sid).await?;
+    }
+
+    // Self-review loop: a reviewer agent inspects the working-tree diff and, on
+    // CHANGES, the implementer is re-invoked to address the notes (resuming the
+    // session). Bounded by config.max_review_rounds. Operates on the primary
+    // worktree — the CLI only ever edits the directory it was launched in.
+    let base_branch = config
+        .find_repo(&repo_refs[0])
+        .map(|r| r.branch.to_string())
+        .unwrap_or_else(|| task.target_branch_or_default().to_string());
+
+    for round in 1..=config.max_review_rounds {
+        let diff = workspace::working_tree_diff(working_dir, &base_branch)
+            .await
+            .unwrap_or_default();
+        if diff.trim().is_empty() {
+            db.insert_log(task.id, "self_review", "No changes to review", "info", None)
+                .await?;
+            break;
+        }
+
+        let verdict = match super::self_review::review_diff(
+            config,
+            db,
+            task,
+            working_dir,
+            &diff,
+            round,
+        )
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                db.insert_log(
+                    task.id,
+                    "self_review",
+                    &format!("Self-review failed ({e}); proceeding with current changes"),
+                    "warning",
+                    None,
+                )
+                .await?;
+                break;
+            }
+        };
+
+        match verdict {
+            super::self_review::Verdict::Approve => {
+                db.insert_log(task.id, "self_review", "Self-review APPROVED", "info", None)
+                    .await?;
+                break;
+            }
+            super::self_review::Verdict::Changes(notes) => {
+                db.insert_log(
+                    task.id,
+                    "self_review",
+                    &format!(
+                        "Self-review requested changes (round {round}/{}):\n{notes}",
+                        config.max_review_rounds
+                    ),
+                    "comment",
+                    None,
+                )
+                .await?;
+
+                if round == config.max_review_rounds {
+                    db.insert_log(
+                        task.id,
+                        "self_review",
+                        "Max review rounds reached — shipping current changes",
+                        "warning",
+                        None,
+                    )
+                    .await?;
+                    break;
+                }
+
+                let revise_prompt = format!(
+                    "A self-review of your changes found issues that must be fixed before this is ready to ship.\n\n\
+                     ## Review notes (address every item)\n{notes}\n\n\
+                     ## Rules\n\
+                     - Fix every item above; keep changes minimal and focused.\n\
+                     - Do NOT run git push, git checkout/switch/branch, or any PR command — Karna handles git.\n\
+                     - Stay in the current working directory."
+                );
+
+                let event_tx = super::spawn_log_consumer(db.clone(), task.id, "implement");
+                let resume = session_id.is_some();
+                let revise = cli::run(
+                    &cli_name,
+                    CliOptions {
+                        working_dir,
+                        prompt: &revise_prompt,
+                        system_prompt: system_prompt.as_deref(),
+                        allowed_tools: Some("Read,Write,Edit,Glob,Grep,Bash"),
+                        max_turns: config.max_turns,
+                        model: &model,
+                        mcp_config_json: mcp_json_str.clone(),
+                        session_id: session_id.as_deref(),
+                        resume,
+                        event_tx: Some(event_tx),
+                        image_paths: image_paths.clone(),
+                    },
+                )
+                .await;
+
+                match revise {
+                    Ok(r) => {
+                        db.add_cost(task.id, r.cost_usd).await?;
+                        if let Some(sid) = &r.session_id {
+                            db.set_session_id(task.id, sid).await?;
+                            session_id = Some(sid.clone());
+                        }
+                    }
+                    Err(e) => {
+                        db.insert_log(
+                            task.id,
+                            "self_review",
+                            &format!("Revision run failed ({e}); proceeding with current changes"),
+                            "warning",
+                            None,
+                        )
+                        .await?;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Clean up temp image files now that all CLI rounds are done.
     if !image_paths.is_empty() {
         tokio::fs::remove_dir_all(&images_dir).await.ok();
     }
 
-    db.add_cost(task.id, result.cost_usd).await?;
-
-    if let Some(sid) = &result.session_id {
-        db.set_session_id(task.id, sid).await?;
-    }
-
-    db.insert_log(task.id, "implement", "Claude Code finished, committing changes", "info", None).await?;
+    db.insert_log(
+        task.id,
+        "implement",
+        "Implementation finished, committing changes",
+        "info",
+        None,
+    )
+    .await?;
 
     // 5. Commit and push for each worktree
     let mut any_pr_created = false;
@@ -138,18 +328,35 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
             .unwrap_or(task.target_branch_or_default());
 
         // Commit any remaining uncommitted changes (Claude Code may have already committed)
-        let commit_msg = format!("chore: uncommitted changes from implementation\n\nKarna task: {}", task.id);
+        let commit_msg = format!(
+            "chore: uncommitted changes from implementation\n\nKarna task: {}",
+            task.id
+        );
         workspace::commit_all(worktree_path, &commit_msg).await?;
 
         // Push if there are ANY commits on this branch (including ones Claude Code made)
         let has_commits = workspace::has_commits_ahead(worktree_path, base_branch).await?;
         if !has_commits {
-            db.insert_log(task.id, "git", "No changes to push — skipping PR", "info", None).await?;
+            db.insert_log(
+                task.id,
+                "git",
+                "No changes to push — skipping PR",
+                "info",
+                None,
+            )
+            .await?;
             continue;
         }
 
         workspace::push(worktree_path, &branch_name).await?;
-        db.insert_log(task.id, "git", &format!("Pushed changes to {}", branch_name), "info", None).await?;
+        db.insert_log(
+            task.id,
+            "git",
+            &format!("Pushed changes to {}", branch_name),
+            "info",
+            None,
+        )
+        .await?;
 
         // 6. Create PR — use commit messages for title & body
         let commits = workspace::commit_log_oneline(worktree_path, base_branch)
@@ -187,14 +394,28 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
         .await?;
 
         db.set_pr(task.id, &pr.url, pr.number).await?;
-        db.insert_log(task.id, "git", &format!("PR opened: {}", pr.url), "info", None).await?;
+        db.insert_log(
+            task.id,
+            "git",
+            &format!("PR opened: {}", pr.url),
+            "info",
+            None,
+        )
+        .await?;
         external::notify_pr_opened(task, &pr.url).await;
         any_pr_created = true;
     }
 
     // If no repos had changes, fail the task so it doesn't loop forever
     if !any_pr_created {
-        db.insert_log(task.id, "implement", "Implementation produced no changes across all repos", "error", None).await?;
+        db.insert_log(
+            task.id,
+            "implement",
+            "Implementation produced no changes across all repos",
+            "error",
+            None,
+        )
+        .await?;
         db.set_error(task.id, "Implementation produced no code changes. The agent may need a clearer task description or plan.").await?;
         return Ok(());
     }
@@ -207,7 +428,7 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
         if current_feedback == original_feedback {
             db.clear_feedback(task.id).await?;
         }
-        let _ = crate::notifications::send_pr_opened(config, &current).await;
+        let _ = crate::notifications::send_pr_opened(config, db, &current).await;
     }
 
     info!(task_id = %task.id, "Implementation complete, PR opened");
@@ -216,7 +437,14 @@ pub async fn implement_task(config: &Config, db: &Database, task: &AgentTask) ->
 
 pub async fn apply_feedback(config: &Config, db: &Database, task: &AgentTask) -> Result<()> {
     info!(task_id = %task.id, "Applying feedback to existing PR");
-    db.insert_log(task.id, "feedback", "Applying reviewer feedback", "info", None).await?;
+    db.insert_log(
+        task.id,
+        "feedback",
+        "Applying reviewer feedback",
+        "info",
+        None,
+    )
+    .await?;
 
     let generated_branch = task.agent_branch_name();
     let branch_name = task.branch.as_deref().unwrap_or(&generated_branch);
@@ -228,9 +456,16 @@ pub async fn apply_feedback(config: &Config, db: &Database, task: &AgentTask) ->
     }
 
     if let Some(pr_number) = task.pr_number {
-        let repo_ref = task.repos().first().map(|s| s.to_string()).unwrap_or_default();
+        let repo_ref = task
+            .repos()
+            .first()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         let repo_name = repo_ref.rsplit('/').next().unwrap_or(&repo_ref);
-        let dir = config.workspaces_dir.join(task.id.to_string()).join(repo_name);
+        let dir = config
+            .workspaces_dir
+            .join(task.id.to_string())
+            .join(repo_name);
         let fallback_dir = config.repos_dir.join(repo_name);
         let working_dir = if dir.exists() { &dir } else { &fallback_dir };
 
@@ -245,7 +480,8 @@ pub async fn apply_feedback(config: &Config, db: &Database, task: &AgentTask) ->
 
     // Fetch task attachments for visual context during feedback
     let attachments = db.get_task_attachments(task.id).await.unwrap_or_default();
-    let feedback_images_dir = std::path::PathBuf::from(format!("/tmp/karna-feedback-images-{}", task.id));
+    let feedback_images_dir =
+        std::path::PathBuf::from(format!("/tmp/karna-feedback-images-{}", task.id));
     let mut feedback_image_paths = Vec::new();
     if !attachments.is_empty() {
         tokio::fs::create_dir_all(&feedback_images_dir).await.ok();
@@ -293,9 +529,16 @@ Karna manages the git workflow. Your job is ONLY to edit files and make commits 
     );
 
     // Find worktree
-    let repo_ref = task.repos().first().map(|s| s.to_string()).unwrap_or_default();
+    let repo_ref = task
+        .repos()
+        .first()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
     let repo_name = repo_ref.rsplit('/').next().unwrap_or(&repo_ref);
-    let worktree_path = config.workspaces_dir.join(task.id.to_string()).join(repo_name);
+    let worktree_path = config
+        .workspaces_dir
+        .join(task.id.to_string())
+        .join(repo_name);
 
     let working_dir = if worktree_path.exists() {
         &worktree_path
@@ -315,36 +558,74 @@ Karna manages the git workflow. Your job is ONLY to edit files and make commits 
     };
 
     // Discover repo extensions and inject skills
-    let (repo_skills, merged_mcp) = discover_all_extensions(config, &[working_dir.to_path_buf()]).await;
+    let (repo_skills, merged_mcp) =
+        discover_all_extensions(config, &[working_dir.to_path_buf()]).await;
     let global_skills = config.skills_for_phase("implement");
     append_skills_to_prompt(&mut prompt, &global_skills, &repo_skills, "implement");
 
     let mcp_json_str = merged_mcp.map(|v| v.to_string());
-    let (cli_name, model, addendum) = super::resolve_runtime(db, task, config).await;
-    let system_prompt = super::merge_system_prompt(config.instructions.as_deref(), addendum.as_deref());
+    let (cli_name, model, addendum) =
+        super::resolve_runtime(db, task, config, super::Stage::Implement).await;
+    let system_prompt =
+        super::merge_system_prompt(config.instructions.as_deref(), addendum.as_deref());
+    let feedback_query = format!(
+        "{title}\n\n{description}\n\n{plan}",
+        title = task.title,
+        plan = plan.chars().take(1_000).collect::<String>(),
+    );
+    let feedback_repos: Vec<String> = task.repos().iter().map(|r| (*r).to_string()).collect();
+    inject_memory_section(
+        config,
+        db,
+        task.id,
+        "feedback",
+        &mut prompt,
+        &feedback_query,
+        &feedback_repos,
+        &cli_name,
+        &model,
+    )
+    .await?;
 
     let has_session = task.agent_session_id.is_some();
     if has_session {
-        db.insert_log(task.id, "feedback", &format!("Invoking {cli_name} ({model}) to apply feedback (resuming session)"), "command", None).await?;
+        db.insert_log(
+            task.id,
+            "feedback",
+            &format!("Invoking {cli_name} ({model}) to apply feedback (resuming session)"),
+            "command",
+            None,
+        )
+        .await?;
     } else {
-        db.insert_log(task.id, "feedback", &format!("Invoking {cli_name} ({model}) to apply feedback"), "command", None).await?;
+        db.insert_log(
+            task.id,
+            "feedback",
+            &format!("Invoking {cli_name} ({model}) to apply feedback"),
+            "command",
+            None,
+        )
+        .await?;
     }
 
     let event_tx = super::spawn_log_consumer(db.clone(), task.id, "feedback");
 
-    let result = cli::run(&cli_name, CliOptions {
-        working_dir,
-        prompt: &prompt,
-        system_prompt: system_prompt.as_deref(),
-        allowed_tools: Some("Read,Write,Edit,Glob,Grep,Bash"),
-        max_turns: config.max_turns,
-        model: &model,
-        mcp_config_json: mcp_json_str.clone(),
-        session_id: task.agent_session_id.as_deref(),
-        resume: has_session,
-        event_tx: Some(event_tx),
-        image_paths: feedback_image_paths.clone(),
-    })
+    let result = cli::run(
+        &cli_name,
+        CliOptions {
+            working_dir,
+            prompt: &prompt,
+            system_prompt: system_prompt.as_deref(),
+            allowed_tools: Some("Read,Write,Edit,Glob,Grep,Bash"),
+            max_turns: config.max_turns,
+            model: &model,
+            mcp_config_json: mcp_json_str.clone(),
+            session_id: task.agent_session_id.as_deref(),
+            resume: has_session,
+            event_tx: Some(event_tx),
+            image_paths: feedback_image_paths.clone(),
+        },
+    )
     .await;
 
     // If session resume failed, retry without session
@@ -352,21 +633,31 @@ Karna manages the git workflow. Your job is ONLY to edit files and make commits 
         Ok(r) => r,
         Err(e) if has_session => {
             info!(task_id = %task.id, error = %e, "Session resume failed, retrying without session");
-            db.insert_log(task.id, "feedback", "Session expired, retrying with fresh session", "warning", None).await?;
+            db.insert_log(
+                task.id,
+                "feedback",
+                "Session expired, retrying with fresh session",
+                "warning",
+                None,
+            )
+            .await?;
             let event_tx = super::spawn_log_consumer(db.clone(), task.id, "feedback");
-            cli::run(&cli_name, CliOptions {
-                working_dir,
-                prompt: &prompt,
-                system_prompt: system_prompt.as_deref(),
-                allowed_tools: Some("Read,Write,Edit,Glob,Grep,Bash"),
-                max_turns: config.max_turns,
-                model: &model,
-                mcp_config_json: mcp_json_str,
-                session_id: None,
-                resume: false,
-                event_tx: Some(event_tx),
-                image_paths: feedback_image_paths.clone(),
-            })
+            cli::run(
+                &cli_name,
+                CliOptions {
+                    working_dir,
+                    prompt: &prompt,
+                    system_prompt: system_prompt.as_deref(),
+                    allowed_tools: Some("Read,Write,Edit,Glob,Grep,Bash"),
+                    max_turns: config.max_turns,
+                    model: &model,
+                    mcp_config_json: mcp_json_str,
+                    session_id: None,
+                    resume: false,
+                    event_tx: Some(event_tx),
+                    image_paths: feedback_image_paths.clone(),
+                },
+            )
             .await?
         }
         Err(e) => return Err(e),
@@ -383,7 +674,10 @@ Karna manages the git workflow. Your job is ONLY to edit files and make commits 
         db.set_session_id(task.id, sid).await?;
     }
 
-    let commit_msg = format!("chore: uncommitted changes from feedback\n\nKarna task: {}", task.id);
+    let commit_msg = format!(
+        "chore: uncommitted changes from feedback\n\nKarna task: {}",
+        task.id
+    );
     let had_changes = workspace::commit_all(working_dir, &commit_msg).await?;
     if had_changes {
         workspace::push(working_dir, branch_name).await?;
@@ -398,8 +692,72 @@ Karna manages the git workflow. Your job is ONLY to edit files and make commits 
             db.clear_feedback(task.id).await?;
         }
     }
-    db.insert_log(task.id, "feedback", "Feedback applied, PR updated", "info", None).await?;
+    db.insert_log(
+        task.id,
+        "feedback",
+        "Feedback applied, PR updated",
+        "info",
+        None,
+    )
+    .await?;
 
     info!(task_id = %task.id, "Feedback applied, back to review");
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn inject_memory_section(
+    config: &Config,
+    db: &Database,
+    task_id: Uuid,
+    phase: &str,
+    prompt: &mut String,
+    query: &str,
+    repo_refs: &[String],
+    cli_name: &str,
+    model: &str,
+) -> Result<usize> {
+    let client = MemoryClient::new(&config.memory);
+    let mut injected = 0usize;
+
+    if client.is_enabled() {
+        let mut namespaces: Vec<String> =
+            repo_refs.iter().map(|repo| repo_namespace(repo)).collect();
+        namespaces.push(agent_namespace(&profile_slug(cli_name, model)));
+        namespaces.sort();
+        namespaces.dedup();
+
+        let mut snippets = Vec::new();
+        for namespace in namespaces {
+            let items = client
+                .search(query, &namespace, config.memory.max_items)
+                .await;
+            for item in items {
+                snippets.push(MemorySnippet {
+                    namespace: namespace.clone(),
+                    text: item.text,
+                });
+            }
+        }
+
+        let snippets = dedupe_snippets(snippets);
+        if let Some(section) =
+            build_memory_section(&snippets, config.memory.max_items, config.memory.max_chars)
+        {
+            prompt.push_str("\n\n");
+            prompt.push_str(&section.text);
+            injected = section.item_count;
+        }
+    }
+
+    db.insert_log(
+        task_id,
+        phase,
+        &format!("Injected {injected} memories into prompt"),
+        "info",
+        None,
+    )
+    .await?;
+
+    Ok(injected)
 }

@@ -5,14 +5,26 @@ use crate::cli::{self, CliOptions};
 use crate::config::{self, Config, Skill};
 use crate::db::Database;
 use crate::git::workspace;
+use crate::memory::{
+    agent_namespace, build_memory_section, dedupe_snippets, profile_slug, repo_namespace,
+    MemoryClient, MemorySnippet,
+};
 use crate::models::{AgentTask, RepoProfile, TaskStatus};
 use crate::onboarding;
 
 pub async fn plan_task(config: &Config, db: &Database, task: &AgentTask) -> Result<()> {
     info!(task_id = %task.id, "Starting planning");
 
-    db.update_status(task.id, TaskStatus::Planning.as_str()).await?;
-    db.insert_log(task.id, "plan", &format!("Starting planning for: {}", task.title), "info", None).await?;
+    db.update_status(task.id, TaskStatus::Planning.as_str())
+        .await?;
+    db.insert_log(
+        task.id,
+        "plan",
+        &format!("Starting planning for: {}", task.title),
+        "info",
+        None,
+    )
+    .await?;
 
     // Setup workspace — for parent tasks without repo, use all known repos (DB + config)
     let repos_to_use: Vec<String> = if task.repos().is_empty() {
@@ -37,7 +49,9 @@ pub async fn plan_task(config: &Config, db: &Database, task: &AgentTask) -> Resu
     let ready_profiles = db.get_ready_repo_profiles().await.unwrap_or_default();
     let has_all_profiles = task.repo.is_none()
         && !ready_profiles.is_empty()
-        && repos_to_use.iter().all(|r| ready_profiles.iter().any(|p| p.repo == *r));
+        && repos_to_use
+            .iter()
+            .all(|r| ready_profiles.iter().any(|p| p.repo == *r));
 
     let mut workspace_paths = Vec::new();
     if has_all_profiles {
@@ -49,7 +63,8 @@ pub async fn plan_task(config: &Config, db: &Database, task: &AgentTask) -> Resu
             let base_branch = repo_config
                 .map(|r| r.branch.as_str())
                 .unwrap_or(task.target_branch_or_default());
-            let repo_path = workspace::ensure_cloned(&config.repos_dir, repo_url, &config.github_token).await?;
+            let repo_path =
+                workspace::ensure_cloned(&config.repos_dir, repo_url, &config.github_token).await?;
             workspace::checkout_and_pull(&repo_path, base_branch).await?;
             workspace_paths.push(repo_path);
         }
@@ -62,7 +77,8 @@ pub async fn plan_task(config: &Config, db: &Database, task: &AgentTask) -> Resu
                 .map(|r| r.branch.as_str())
                 .unwrap_or(task.target_branch_or_default());
 
-            let repo_path = workspace::ensure_cloned(&config.repos_dir, repo_url, &config.github_token).await?;
+            let repo_path =
+                workspace::ensure_cloned(&config.repos_dir, repo_url, &config.github_token).await?;
             workspace::checkout_and_pull(&repo_path, base_branch).await?;
             workspace_paths.push(repo_path);
         }
@@ -87,7 +103,14 @@ pub async fn plan_task(config: &Config, db: &Database, task: &AgentTask) -> Resu
             }
             image_paths.push(path);
         }
-        db.insert_log(task.id, "plan", &format!("Loaded {} image attachment(s)", attachments.len()), "info", None).await?;
+        db.insert_log(
+            task.id,
+            "plan",
+            &format!("Loaded {} image attachment(s)", attachments.len()),
+            "info",
+            None,
+        )
+        .await?;
     }
 
     let images_section = if !attachments.is_empty() {
@@ -97,8 +120,14 @@ pub async fn plan_task(config: &Config, db: &Database, task: &AgentTask) -> Resu
     };
 
     // Build prompt
-    let description = task.description.as_deref().unwrap_or("No description provided.");
-    let repo_display = task.repo.as_deref().unwrap_or("Multiple repositories (see subtask instructions below)");
+    let description = task
+        .description
+        .as_deref()
+        .unwrap_or("No description provided.");
+    let repo_display = task
+        .repo
+        .as_deref()
+        .unwrap_or("Multiple repositories (see subtask instructions below)");
     let mut prompt = include_str!("../../templates/plan_prompt.txt").to_string();
     prompt = prompt.replace("{title}", &task.title);
     prompt = prompt.replace("{description}", description);
@@ -115,7 +144,9 @@ pub async fn plan_task(config: &Config, db: &Database, task: &AgentTask) -> Resu
                 .iter()
                 .filter(|p| repos_to_use.contains(&p.repo))
                 .collect();
-            onboarding::format_profiles_for_prompt(&relevant.into_iter().cloned().collect::<Vec<_>>())
+            onboarding::format_profiles_for_prompt(
+                &relevant.into_iter().cloned().collect::<Vec<_>>(),
+            )
         } else {
             String::new()
         };
@@ -157,9 +188,62 @@ Rules for subtasks:
         ));
     }
 
-    let (cli_name, model, addendum) = super::resolve_runtime(db, task, config).await;
-    let system_prompt = super::merge_system_prompt(config.instructions.as_deref(), addendum.as_deref());
-    db.insert_log(task.id, "plan", &format!("Invoking {cli_name} ({model}) for planning"), "command", None).await?;
+    let (cli_name, model, addendum) =
+        super::resolve_runtime(db, task, config, super::Stage::Plan).await;
+    let system_prompt =
+        super::merge_system_prompt(config.instructions.as_deref(), addendum.as_deref());
+
+    let memory_client = MemoryClient::new(&config.memory);
+    let mut injected_memories = 0usize;
+    if memory_client.is_enabled() {
+        let mut namespaces: Vec<String> = repos_to_use
+            .iter()
+            .map(|repo| repo_namespace(repo))
+            .collect();
+        namespaces.push(agent_namespace(&profile_slug(&cli_name, &model)));
+        namespaces.sort();
+        namespaces.dedup();
+
+        let mut snippets = Vec::new();
+        let memory_query = format!("{title}\n\n{description}", title = task.title);
+        for namespace in namespaces {
+            let items = memory_client
+                .search(&memory_query, &namespace, config.memory.max_items)
+                .await;
+            for item in items {
+                snippets.push(MemorySnippet {
+                    namespace: namespace.clone(),
+                    text: item.text,
+                });
+            }
+        }
+
+        let snippets = dedupe_snippets(snippets);
+        if let Some(section) =
+            build_memory_section(&snippets, config.memory.max_items, config.memory.max_chars)
+        {
+            prompt.push_str("\n\n");
+            prompt.push_str(&section.text);
+            injected_memories = section.item_count;
+        }
+    }
+    db.insert_log(
+        task.id,
+        "plan",
+        &format!("Injected {injected_memories} memories into prompt"),
+        "info",
+        None,
+    )
+    .await?;
+
+    db.insert_log(
+        task.id,
+        "plan",
+        &format!("Invoking {cli_name} ({model}) for planning"),
+        "command",
+        None,
+    )
+    .await?;
 
     // Write merged MCP config
     let mcp_json_str = merged_mcp.map(|v| v.to_string());
@@ -167,19 +251,22 @@ Rules for subtasks:
     // Stream CLI events as agent logs so the user can watch progress
     let event_tx = super::spawn_log_consumer(db.clone(), task.id, "plan");
 
-    let result = cli::run(&cli_name, CliOptions {
-        working_dir,
-        prompt: &prompt,
-        system_prompt: system_prompt.as_deref(),
-        allowed_tools: Some("Read,Glob,Grep,Bash"),
-        max_turns: 50,
-        model: &model,
-        mcp_config_json: mcp_json_str,
-        session_id: None,
-        resume: false,
-        event_tx: Some(event_tx),
-        image_paths: image_paths.clone(),
-    })
+    let result = cli::run(
+        &cli_name,
+        CliOptions {
+            working_dir,
+            prompt: &prompt,
+            system_prompt: system_prompt.as_deref(),
+            allowed_tools: Some("Read,Glob,Grep,Bash"),
+            max_turns: 50,
+            model: &model,
+            mcp_config_json: mcp_json_str,
+            session_id: None,
+            resume: false,
+            event_tx: Some(event_tx),
+            image_paths: image_paths.clone(),
+        },
+    )
     .await?;
 
     // Clean up temp image files
@@ -204,10 +291,17 @@ Rules for subtasks:
         // Run policy scan against the fresh plan. Advisory; failures are
         // logged and don't break planning.
         crate::policies::scan_and_persist(db, &current).await;
-        let _ = crate::notifications::send_plan_ready(config, &current).await;
+        let _ = crate::notifications::send_plan_ready(config, db, &current).await;
     }
 
-    db.insert_log(task.id, "plan", "Plan generated, awaiting review", "info", None).await?;
+    db.insert_log(
+        task.id,
+        "plan",
+        "Plan generated, awaiting review",
+        "info",
+        None,
+    )
+    .await?;
     info!(task_id = %task.id, "Plan ready for review");
 
     Ok(())

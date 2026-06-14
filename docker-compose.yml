@@ -38,6 +38,55 @@ services:
       interval: 5s
       retries: 5
 
+  # Optional mem0 stack (enable with: docker compose --profile memory up -d mem0)
+  # Karna agent config should point `memory.url` at this service (default: http://localhost:8888).
+  mem0-postgres:
+    image: ankane/pgvector:v0.5.1
+    profiles: ["memory"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${MEM0_POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${MEM0_APP_DB_NAME:-mem0_app}
+    volumes:
+      - mem0-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-q", "-d", "postgres", "-U", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mem0:
+    image: mem0/mem0-api-server:latest
+    profiles: ["memory"]
+    environment:
+      LLM_PROVIDER: ${MEM0_LLM_PROVIDER:-openai}
+      LLM_MODEL: ${MEM0_LLM_MODEL:-openai/gpt-4o-mini}
+      LLM_API_KEY: ${MEM0_LLM_API_KEY:-${MEM0_API_KEY:-${MEM0_OPENROUTER_API_KEY:-${OPENROUTER_API_KEY:-${MEM0_OPENAI_API_KEY:-}}}}}
+      LLM_BASE_URL: ${MEM0_LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      EMBEDDER_PROVIDER: ${MEM0_EMBEDDER_PROVIDER:-openai}
+      EMBEDDER_MODEL: ${MEM0_EMBEDDER_MODEL:-openai/text-embedding-3-small}
+      EMBEDDER_API_KEY: ${MEM0_EMBEDDER_API_KEY:-${MEM0_API_KEY:-${MEM0_OPENROUTER_API_KEY:-${OPENROUTER_API_KEY:-${MEM0_OPENAI_API_KEY:-}}}}}
+      EMBEDDER_BASE_URL: ${MEM0_EMBEDDER_BASE_URL:-https://openrouter.ai/api/v1}
+      # Compatibility for mem0 code paths that still consult OPENAI_* / OPENROUTER_* envs.
+      OPENROUTER_API_KEY: ${MEM0_OPENROUTER_API_KEY:-${OPENROUTER_API_KEY:-}}
+      OPENAI_API_KEY: ${MEM0_OPENAI_API_KEY:-${MEM0_API_KEY:-${MEM0_OPENROUTER_API_KEY:-${OPENROUTER_API_KEY:-}}}}
+      OPENAI_BASE_URL: ${MEM0_OPENAI_BASE_URL:-${MEM0_EMBEDDER_BASE_URL:-${MEM0_LLM_BASE_URL:-https://openrouter.ai/api/v1}}}
+      JWT_SECRET: ${MEM0_JWT_SECRET:-mem0-local-dev-secret}
+      AUTH_DISABLED: ${MEM0_AUTH_DISABLED:-true}
+      POSTGRES_HOST: mem0-postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${MEM0_POSTGRES_PASSWORD:-postgres}
+      APP_DB_NAME: ${MEM0_APP_DB_NAME:-mem0_app}
+      MEM0_TELEMETRY: ${MEM0_TELEMETRY:-false}
+    depends_on:
+      mem0-postgres: { condition: service_healthy }
+    ports:
+      - "${MEM0_PORT:-8888}:8000"
+    volumes:
+      - mem0-history:/app/history
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -174,5 +223,7 @@ services:
 volumes:
   pgdata:
   redisdata:
+  mem0-pgdata:
+  mem0-history:
   workspace:
   code-server-extensions:    # Persist installed extensions across restarts

@@ -4,7 +4,7 @@
 
 <h1 align="center">Karna</h1>
 
-<p align="center">Agent for programmers who like to touch grass. Create tasks on a kanban board, an AI agent plans and implements them, opens PRs on GitHub, and notifies you via email.</p>
+<p align="center">Agent for programmers who like to touch grass. Create tasks on a kanban board, Karna plans and implements them, opens PRs on GitHub, and can notify via Slack/email.</p>
 
 ```
 You create a task → Agent writes a plan → You review → Agent implements → Opens PR → You merge
@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/Warlord-K/karna/main/install.sh | b
 
 You'll need:
 - A **GitHub PAT** with `repo` + `workflow` scopes ([create one](https://github.com/settings/tokens))
-- A **Claude Code OAuth token** (`npm install -g @anthropic-ai/claude-code && claude setup-token`)
+- Auth for at least one enabled backend (for example `claude`, `codex`, `cursor-agent`, `grok`, or `opencode`)
 
 That's it. Open [localhost:3000](http://localhost:3000) and create your first task.
 
@@ -56,19 +56,41 @@ docker compose up
 
 </details>
 
+## Features
+
+- Code task pipeline with stage gates: `todo -> planning -> plan_review -> in_progress -> review -> done` (+ `failed`/`cancelled`)
+- Per-stage agent profiles (`planner`, `implementer`, `reviewer`) with backend/model routing
+- Built-in self-review loop (bounded implement <-> review rounds before PR)
+- Non-code task kinds (`doc`, `research`, `ops`) with generic MCP-enabled execution
+- Orchestrator tasks with `<!-- actions -->` contract (`reply`, `run`, `defer`, `subtask`, `escalate`, `close`)
+- Chat UI backed by orchestrator tasks (`source='chat'`) with SSE log streaming and polling fallback
+- Slack Socket Mode control plane (allowlisted commands, gates, and thread steering)
+- Optional mem0 memory injection + write-back namespaces (`repo`, `agent`, `user`)
+
+## Documentation
+
+- [`docs/architecture.md`](docs/architecture.md) - runtime architecture, task flow, orchestrator/memory/slack behavior, module map
+- [`docs/configuration.md`](docs/configuration.md) - `config.yaml` reference, secrets/auth, local/docker/helm deployment, soft-task/orchestrator API usage
+
 ## How It Works
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Frontend   │────▶│   Postgres   │◀────│  Rust Agent  │
-│  Next.js     │     │   + Redis    │     │  polls every │
-│  :3000       │     │              │     │  30 seconds  │
-└──────────────┘     └──────────────┘     └──────┬───────┘
+│   Frontend   │────▶│  Rust API     │────▶│ Postgres/Redis│
+│  Next.js     │     │   (Axum)      │     │ task+log state│
+│  :3000       │     │   :8081        │     │ + locks/cache │
+└──────────────┘     └──────────────┘     └──────▲─────────┘
                                                   │
-                                       ┌──────────┼──────────┐
-                                       ▼          ▼          ▼
-                                  Claude Code   git/gh    Resend
-                                  or Codex      (PRs)     (email)
+                                       ┌──────────┴──────────┐
+                                       │    Rust Agent       │
+                                       │ polls + executes    │
+                                       │ flow/orchestrator   │
+                                       └──────┬──────────────┘
+                                              │
+                             ┌────────────────┼────────────────┐
+                             ▼                ▼                ▼
+                      CLI backends       git/gh PR flow   Slack/Email
+             (claude/codex/cursor/grok/opencode)         notifications
 ```
 
 **Task lifecycle:**
@@ -95,12 +117,15 @@ Tasks can span multiple repositories. Create a task without selecting a specific
 
 ### CLI Backends
 
-Tasks can use either **Claude Code** or **OpenAI Codex** as the AI backend. Pick the CLI and model when creating a task.
+Pick backend + model per task (or per stage via agent profiles).
 
-| Backend | Models | MCP Support | Auth |
-|---------|--------|-------------|------|
-| `claude` | opus, sonnet, haiku | Yes | `claude setup-token` → set `CLAUDE_CODE_OAUTH_TOKEN` in `.env` |
-| `codex` | gpt-5.4, gpt-5.4-mini, gpt-5.3-codex | No | `codex login` → mounts `~/.codex` automatically |
+| Backend | Auth mode | Notes |
+|---------|-----------|------|
+| `claude` | `claude login` or `CLAUDE_CODE_OAUTH_TOKEN` | Stream-json events + cost tracking |
+| `codex` | `codex login` | JSON event parsing, session resume support |
+| `cursor` | `cursor-agent login` | Stream-json parsing, no image input |
+| `grok` | `grok login` | Streaming text deltas, no discrete tool-call events |
+| `opencode` | `OPENROUTER_API_KEY` | OpenRouter models, reads MCP from `~/.config/opencode/opencode.json` |
 
 ## Services
 
@@ -169,19 +194,11 @@ Repos can also ship their own `skills/` directory — auto-discovered when the a
 
 ## MCP Servers
 
-5 MCP servers are enabled by default (no API keys needed):
+MCP servers are configured in `config.yaml` (`mcp_servers`) and merged with per-repo `.mcp.json` files at runtime.
 
-| Server | Purpose |
-|--------|---------|
-| **fetch** | Read any URL as markdown |
-| **context7** | Up-to-date library documentation |
-| **memory** | Persistent knowledge graph across tasks |
-| **sequential-thinking** | Structured reasoning |
-| **github** | Full GitHub API (uses your GITHUB_TOKEN) |
+`config.example.yaml` includes common server definitions; secrets should be passed via `${VAR}` placeholders resolved from environment variables.
 
-Add more in `config.yaml` — Sentry, Linear, Slack, Postgres, Supabase, Notion, Brave Search, and Playwright are preconfigured and just need API keys.
-
-Repos can provide `.mcp.json` at their root — auto-discovered and merged at runtime.
+For deployment-safe secret wiring patterns, see [`docs/configuration.md`](docs/configuration.md).
 
 ## Agent Instructions
 
@@ -269,49 +286,17 @@ TUNNEL_CODE_SERVER_HOSTNAME=code.yourdomain.com
 
 ## Configuration Reference
 
-### `config.yaml`
+See [`docs/configuration.md`](docs/configuration.md) for the complete, current operator reference.
 
-```yaml
-repos:
-  - repo: you/backend
-    branch: main
-  - repo: you/frontend
-    branch: main
-
-agent:
-  max_turns: 100              # Max CLI turns per invocation
-  poll_interval_secs: 30      # Task polling frequency
-  max_concurrent_tasks: 1     # Per worker (increase with --scale)
-  instructions: instructions.md  # Optional system prompt file
-
-  backends:
-    claude:
-      models: [opus, sonnet, haiku]
-      default_model: sonnet
-    codex:
-      models: [gpt-5.4, gpt-5.4-mini, gpt-5.3-codex]
-      default_model: gpt-5.4
-
-notifications:
-  email: you@example.com
-```
-
-### Environment Variables
+Minimum environment variables for a working agent+API setup:
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `GITHUB_TOKEN` | Yes | Git operations, PRs ([scopes: repo, workflow](https://github.com/settings/tokens)) |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Yes (Claude) | Claude Code CLI auth |
-| `AUTH_SECRET` | Yes | Session encryption (`openssl rand -hex 32`) |
-| `AUTH_DISABLED` | No | Set `true` to skip auth (single-user mode) |
-| `SIGNUP_DISABLED` | No | Default: signups disabled. Set `false` to allow registration |
-| `RESEND_API_KEY` | No | Email notifications via [Resend](https://resend.com) |
-| `GIT_AUTHOR_NAME` | No | Default: `Karna Agent` |
-| `GIT_AUTHOR_EMAIL` | No | Default: `agent@karna.dev` |
-| `CODE_SERVER_PASSWORD` | No | Default: `changeme` |
-| `AGENT_WEBHOOK_URL` | No | Webhook URL for GitHub (e.g. ngrok URL) |
-| `GITHUB_WEBHOOK_SECRET` | No | HMAC-SHA256 verification (`openssl rand -hex 32`) |
-| `CLOUDFLARE_TUNNEL_TOKEN` | No | CF tunnel (token mode) |
+| `DATABASE_URL` | Yes | Postgres connection string |
+| `REDIS_URL` | Yes | Redis connection string |
+| `GITHUB_TOKEN` | Yes | Git operations + PR creation |
+| `AUTH_SECRET` | Yes (unless `AUTH_DISABLED=true`) | Auth/session secret |
+| Backend auth | Yes (at least one backend) | `CLAUDE_CODE_OAUTH_TOKEN` or `codex login` / `cursor-agent login` / `grok login` / `OPENROUTER_API_KEY` |
 
 ## Backup & Restore
 
@@ -525,7 +510,7 @@ docker-compose.yml
 ├── postgres:16       — Auth sessions + tasks + logs
 ├── redis:7           — Task queue + distributed locks
 ├── api (Rust/Axum)   — REST API, serves all data to the frontend
-├── agent (Rust)      — Polls DB, invokes Claude Code or Codex CLI, git/gh operations
+├── agent (Rust)      — Polls DB, invokes configured CLI backend(s), git/gh operations
 ├── frontend (Next.js)— Kanban board, Auth.js with credentials auth, proxies /api to Rust API
 ├── code-server       — Browser IDE to watch agent edit files
 ├── tunnel            — Optional Cloudflare Tunnel for public access
@@ -534,7 +519,7 @@ docker-compose.yml
 
 The API and agent share a `karna-shared` Rust crate (database client + domain models). The frontend contains no database queries — it proxies all data requests to the Rust API via Next.js rewrites.
 
-**Tech stack:** Rust (Tokio, Axum, sqlx, redis) · Next.js 15, React 19, Auth.js v5, Tailwind, dnd-kit, Framer Motion · PostgreSQL 16 · Redis 7 · Claude Code CLI + OpenAI Codex CLI
+**Tech stack:** Rust (Tokio, Axum, sqlx, redis) · Next.js 15, React 19, Auth.js v5, Tailwind, dnd-kit, Framer Motion · PostgreSQL 16 · Redis 7 · CLI backends (`claude`, `codex`, `cursor`, `grok`, `opencode`)
 
 ## License
 

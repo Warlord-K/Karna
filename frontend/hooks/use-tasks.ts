@@ -28,6 +28,23 @@ export const taskKeys = {
   agents: ['agents'] as const,
 };
 
+function logTimestamp(log: AgentLog): number {
+  const ts = Date.parse(log.created_at);
+  return Number.isNaN(ts) ? 0 : ts;
+}
+
+export function mergeTaskLogs(base: AgentLog[], extra: AgentLog[]): AgentLog[] {
+  const byId = new Map<string, AgentLog>();
+  for (const log of base) byId.set(log.id, log);
+  for (const log of extra) byId.set(log.id, log);
+
+  return Array.from(byId.values()).sort((a, b) => {
+    const timeDiff = logTimestamp(a) - logTimestamp(b);
+    if (timeDiff !== 0) return timeDiff;
+    return a.id.localeCompare(b.id);
+  });
+}
+
 interface AppConfig {
   repos: string[];
   backends: Record<string, { models: string[]; default_model: string }>;

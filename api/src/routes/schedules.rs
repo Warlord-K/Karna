@@ -33,17 +33,22 @@ pub async fn list(
 ) -> Result<Json<Value>, StatusCode> {
     let key = cache::schedules_list_key(user.0);
     let db = state.db.clone();
-    let result = cache::get_or_set(&state.redis, &key, cache::DEFAULT_TTL_SECS, move || async move {
-        let schedules = db.list_schedules_for_user(user.0).await?;
-        let mut result = Vec::new();
-        for s in &schedules {
-            let last_run = db.get_last_run(s.id).await.ok().flatten();
-            let mut val = serde_json::to_value(s).unwrap_or(json!({}));
-            val["last_run"] = serde_json::to_value(&last_run).unwrap_or(Value::Null);
-            result.push(val);
-        }
-        Ok(Value::Array(result))
-    })
+    let result = cache::get_or_set(
+        &state.redis,
+        &key,
+        cache::DEFAULT_TTL_SECS,
+        move || async move {
+            let schedules = db.list_schedules_for_user(user.0).await?;
+            let mut result = Vec::new();
+            for s in &schedules {
+                let last_run = db.get_last_run(s.id).await.ok().flatten();
+                let mut val = serde_json::to_value(s).unwrap_or(json!({}));
+                val["last_run"] = serde_json::to_value(&last_run).unwrap_or(Value::Null);
+                result.push(val);
+            }
+            Ok(Value::Array(result))
+        },
+    )
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -93,7 +98,12 @@ pub async fn get(
     Extension(user): Extension<UserId>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, StatusCode> {
-    if !state.db.schedule_belongs_to_user(id, user.0).await.unwrap_or(false) {
+    if !state
+        .db
+        .schedule_belongs_to_user(id, user.0)
+        .await
+        .unwrap_or(false)
+    {
         return Err(StatusCode::NOT_FOUND);
     }
 
@@ -159,7 +169,12 @@ pub async fn trigger(
     Extension(user): Extension<UserId>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, StatusCode> {
-    if !state.db.schedule_belongs_to_user(id, user.0).await.unwrap_or(false) {
+    if !state
+        .db
+        .schedule_belongs_to_user(id, user.0)
+        .await
+        .unwrap_or(false)
+    {
         return Err(StatusCode::NOT_FOUND);
     }
 
@@ -186,15 +201,23 @@ pub async fn list_runs(
     Extension(user): Extension<UserId>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<karna_shared::models::ScheduledRun>>, StatusCode> {
-    if !state.db.schedule_belongs_to_user(id, user.0).await.unwrap_or(false) {
+    if !state
+        .db
+        .schedule_belongs_to_user(id, user.0)
+        .await
+        .unwrap_or(false)
+    {
         return Err(StatusCode::NOT_FOUND);
     }
 
     let key = cache::schedule_runs_key(id);
     let db = state.db.clone();
-    let runs = cache::get_or_set(&state.redis, &key, cache::DEFAULT_TTL_SECS, move || async move {
-        db.get_schedule_runs(id, 50).await
-    })
+    let runs = cache::get_or_set(
+        &state.redis,
+        &key,
+        cache::DEFAULT_TTL_SECS,
+        move || async move { db.get_schedule_runs(id, 50).await },
+    )
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -206,15 +229,23 @@ pub async fn run_logs(
     Extension(user): Extension<UserId>,
     Path((id, run_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Vec<karna_shared::models::ScheduledRunLog>>, StatusCode> {
-    if !state.db.schedule_belongs_to_user(id, user.0).await.unwrap_or(false) {
+    if !state
+        .db
+        .schedule_belongs_to_user(id, user.0)
+        .await
+        .unwrap_or(false)
+    {
         return Err(StatusCode::NOT_FOUND);
     }
 
     let key = cache::schedule_run_logs_key(run_id);
     let db = state.db.clone();
-    let logs = cache::get_or_set(&state.redis, &key, cache::DEFAULT_TTL_SECS, move || async move {
-        db.get_run_logs(run_id, 200).await
-    })
+    let logs = cache::get_or_set(
+        &state.redis,
+        &key,
+        cache::DEFAULT_TTL_SECS,
+        move || async move { db.get_run_logs(run_id, 200).await },
+    )
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

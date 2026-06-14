@@ -5,11 +5,12 @@ import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useTasks } from '@/hooks/use-tasks';
 import { AuthDisabledProvider } from '@/lib/auth-context';
-import { SignOut, CircleNotch, CalendarBlank, Kanban, GitFork, Robot, ShieldCheck } from '@phosphor-icons/react';
+import { SignOut, CircleNotch, CalendarBlank, Kanban, GitFork, Robot, ShieldCheck, ChatCenteredText } from '@phosphor-icons/react';
 import { Toaster } from 'react-hot-toast';
 
 const NAV_ITEMS = [
   { href: '/', label: 'Board', icon: Kanban },
+  { href: '/chat', label: 'Chat', icon: ChatCenteredText },
   { href: '/schedules', label: 'Schedules', icon: CalendarBlank },
   { href: '/repos', label: 'Repos', icon: GitFork },
   { href: '/agents', label: 'Agents', icon: Robot },
@@ -36,6 +37,7 @@ export function DashboardShell({ authDisabled, children }: { authDisabled: boole
   }
 
   const activeSection = pathname === '/' ? '/'
+    : pathname.startsWith('/chat') ? '/chat'
     : pathname.startsWith('/schedules') ? '/schedules'
     : pathname.startsWith('/repos') ? '/repos'
     : pathname.startsWith('/agents') ? '/agents'

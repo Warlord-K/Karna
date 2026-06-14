@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct BackendConfig {
@@ -33,8 +34,13 @@ pub struct Config {
     pub workspaces_dir: PathBuf,
     pub poll_interval_secs: u64,
     pub max_turns: u32,
+    /// Max implement ↔ self-review rounds before shipping the changes as-is.
+    /// 0 disables the self-review loop entirely.
+    pub max_review_rounds: u32,
+    pub memory: MemoryConfig,
     /// Configured backends. First entry is the default.
     pub backends: Backends,
+    pub slack: SlackConfig,
     pub repos: Vec<RepoConfig>,
     pub skills: Vec<Skill>,
     pub mcp_servers: Vec<McpServer>,
@@ -49,6 +55,31 @@ pub struct Config {
 }
 
 #[derive(Clone, Debug)]
+pub struct MemoryConfig {
+    /// Enable mem0-backed memory lookup/injection.
+    pub enabled: bool,
+    /// Base URL of the mem0 REST API.
+    pub url: String,
+    /// Max number of memory snippets injected into a prompt.
+    pub max_items: usize,
+    /// Max character budget for the `## Memory` prompt section.
+    pub max_chars: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct SlackConfig {
+    pub enabled: bool,
+    pub default_channel: Option<String>,
+    /// Slack user ids to DM for outbound task updates when no task channel is set.
+    pub dm_user_ids: Vec<String>,
+    pub allowed_user_ids: Vec<String>,
+    /// Mapping from Slack user id (`U...`) → Karna user UUID.
+    pub user_map: HashMap<String, Uuid>,
+    pub bot_token: Option<String>,
+    pub app_token: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub struct SigningConfig {
     /// Path to the SSH private key used for signing commits.
     pub ssh_key_path: PathBuf,
@@ -60,12 +91,7 @@ pub struct SigningConfig {
 const SIGNING_MOUNT_DIR: &str = "/home/agent/.ssh/signing";
 
 /// Common SSH private key filenames to look for in the signing mount.
-const SIGNING_KEY_NAMES: &[&str] = &[
-    "signing_key",
-    "id_ed25519",
-    "id_ecdsa",
-    "id_rsa",
-];
+const SIGNING_KEY_NAMES: &[&str] = &["signing_key", "id_ed25519", "id_ecdsa", "id_rsa"];
 
 impl SigningConfig {
     /// Scan the well-known signing mount directory for an SSH private key.
@@ -207,6 +233,36 @@ struct ConfigFile {
     signing: Option<SigningFileConfig>,
     #[serde(default)]
     schedules: Vec<ScheduleConfig>,
+    #[serde(default)]
+    memory: MemoryFileConfig,
+    #[serde(default)]
+    slack: SlackFileConfig,
+}
+
+#[derive(Deserialize, Default)]
+struct MemoryFileConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_memory_url")]
+    url: String,
+    #[serde(default = "default_memory_max_items")]
+    max_items: usize,
+    #[serde(default = "default_memory_max_chars")]
+    max_chars: usize,
+}
+
+#[derive(Deserialize, Default)]
+struct SlackFileConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    default_channel: Option<String>,
+    #[serde(default)]
+    dm_user_ids: Vec<String>,
+    #[serde(default)]
+    allowed_user_ids: Vec<String>,
+    #[serde(default)]
+    user_map: HashMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -222,6 +278,9 @@ struct AgentFileConfig {
     max_turns: u32,
     #[serde(default = "default_poll_interval")]
     poll_interval_secs: u64,
+    /// Bounded rounds of implement ↔ self-review. 0 disables self-review.
+    #[serde(default = "default_max_review_rounds")]
+    max_review_rounds: u32,
     /// Available backends with models. Order matters — first is default.
     #[serde(default = "default_backends")]
     backends: Backends,
@@ -239,27 +298,59 @@ struct NotificationsFileConfig {
 
 fn default_backends() -> Backends {
     let mut backends = Backends::new();
-    backends.insert("claude".to_string(), BackendConfig {
-        models: vec!["haiku".into(), "sonnet".into(), "opus".into()],
-        default_model: Some("sonnet".into()),
-    });
-    backends.insert("codex".to_string(), BackendConfig {
-        models: vec!["o4-mini".into(), "o3".into()],
-        default_model: Some("o4-mini".into()),
-    });
+    backends.insert(
+        "claude".to_string(),
+        BackendConfig {
+            models: vec!["haiku".into(), "sonnet".into(), "opus".into()],
+            default_model: Some("sonnet".into()),
+        },
+    );
+    backends.insert(
+        "codex".to_string(),
+        BackendConfig {
+            models: vec!["o4-mini".into(), "o3".into()],
+            default_model: Some("o4-mini".into()),
+        },
+    );
+    backends.insert(
+        "cursor".to_string(),
+        BackendConfig {
+            models: vec!["sonnet-4.5".into(), "gpt-5".into(), "auto".into()],
+            default_model: Some("sonnet-4.5".into()),
+        },
+    );
+    backends.insert(
+        "grok".to_string(),
+        BackendConfig {
+            models: vec!["grok-build".into()],
+            default_model: Some("grok-build".into()),
+        },
+    );
     backends
 }
 fn default_max_turns() -> u32 {
     100
 }
+fn default_max_review_rounds() -> u32 {
+    3
+}
 fn default_poll_interval() -> u64 {
     30
+}
+fn default_memory_url() -> String {
+    "http://localhost:8888".to_string()
+}
+fn default_memory_max_items() -> usize {
+    8
+}
+fn default_memory_max_chars() -> usize {
+    2000
 }
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let config_path = std::env::var("CONFIG_PATH")
-            .unwrap_or_else(|_| "/etc/karna/config.yaml".to_string());
+        let config_path =
+            std::env::var("CONFIG_PATH").unwrap_or_else(|_| "/etc/karna/config.yaml".to_string());
 
         let path = std::path::Path::new(&config_path);
         let file_config = if path.is_file() {
@@ -268,13 +359,14 @@ impl Config {
             serde_yaml::from_str::<ConfigFile>(&contents)
                 .with_context(|| format!("Failed to parse config file: {config_path}"))?
         } else {
-            tracing::warn!("Config file not found at {config_path}, using defaults (repos/schedules from DB)");
+            tracing::warn!(
+                "Config file not found at {config_path}, using defaults (repos/schedules from DB)"
+            );
             ConfigFile::default()
         };
 
-        let repos_dir = PathBuf::from(
-            std::env::var("REPOS_DIR").unwrap_or_else(|_| "/workspace".to_string()),
-        );
+        let repos_dir =
+            PathBuf::from(std::env::var("REPOS_DIR").unwrap_or_else(|_| "/workspace".to_string()));
         let workspaces_dir = PathBuf::from(
             std::env::var("WORKSPACES_DIR")
                 .unwrap_or_else(|_| repos_dir.join(".workspaces").to_string_lossy().to_string()),
@@ -365,17 +457,17 @@ impl Config {
         };
 
         Ok(Self {
-            database_url: std::env::var("DATABASE_URL")
-                .context("DATABASE_URL is required")?,
+            database_url: std::env::var("DATABASE_URL").context("DATABASE_URL is required")?,
             redis_url: std::env::var("REDIS_URL")
                 .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
             claude_code_oauth_token: std::env::var("CLAUDE_CODE_OAUTH_TOKEN").ok(),
-            github_token: std::env::var("GITHUB_TOKEN")
-                .context("GITHUB_TOKEN is required")?,
+            github_token: std::env::var("GITHUB_TOKEN").context("GITHUB_TOKEN is required")?,
             resend_api_key: std::env::var("RESEND_API_KEY").ok(),
             github_webhook_secret: std::env::var("GITHUB_WEBHOOK_SECRET").ok(),
             webhook_url: std::env::var("AGENT_WEBHOOK_URL").ok().or_else(|| {
-                std::env::var("TUNNEL_AGENT_HOSTNAME").ok().map(|h| format!("https://{h}"))
+                std::env::var("TUNNEL_AGENT_HOSTNAME")
+                    .ok()
+                    .map(|h| format!("https://{h}"))
             }),
             notification_email: file_config
                 .notifications
@@ -389,7 +481,39 @@ impl Config {
             workspaces_dir,
             poll_interval_secs: file_config.agent.poll_interval_secs,
             max_turns: file_config.agent.max_turns,
+            max_review_rounds: file_config.agent.max_review_rounds,
+            memory: MemoryConfig {
+                enabled: file_config.memory.enabled,
+                url: file_config.memory.url,
+                max_items: file_config.memory.max_items,
+                max_chars: file_config.memory.max_chars,
+            },
             backends: file_config.agent.backends,
+            slack: SlackConfig {
+                enabled: file_config.slack.enabled,
+                default_channel: file_config.slack.default_channel,
+                dm_user_ids: file_config.slack.dm_user_ids,
+                allowed_user_ids: file_config.slack.allowed_user_ids,
+                user_map: file_config
+                    .slack
+                    .user_map
+                    .into_iter()
+                    .filter_map(|(slack_user, user_id)| match Uuid::parse_str(&user_id) {
+                        Ok(parsed) => Some((slack_user, parsed)),
+                        Err(e) => {
+                            tracing::warn!(
+                                slack_user,
+                                user_id,
+                                error = %e,
+                                "Skipping invalid Slack user mapping"
+                            );
+                            None
+                        }
+                    })
+                    .collect(),
+                bot_token: std::env::var("SLACK_BOT_TOKEN").ok(),
+                app_token: std::env::var("SLACK_APP_TOKEN").ok(),
+            },
             repos: file_config.repos,
             skills,
             mcp_servers,
@@ -401,21 +525,29 @@ impl Config {
 
     /// Default CLI backend name (first in backends map).
     pub fn default_cli(&self) -> &str {
-        self.backends.keys().next().map(|s| s.as_str()).unwrap_or("claude")
+        self.backends
+            .keys()
+            .next()
+            .map(|s| s.as_str())
+            .unwrap_or("claude")
     }
 
     /// Default model for a given CLI backend.
     pub fn default_model(&self, cli: &str) -> &str {
         self.backends
             .get(cli)
-            .and_then(|b| b.default_model.as_deref().or(b.models.first().map(|s| s.as_str())))
+            .and_then(|b| {
+                b.default_model
+                    .as_deref()
+                    .or(b.models.first().map(|s| s.as_str()))
+            })
             .unwrap_or("sonnet")
     }
 
     pub fn find_repo(&self, repo_ref: &str) -> Option<&RepoConfig> {
-        self.repos.iter().find(|r| {
-            r.repo == repo_ref || r.name() == repo_ref
-        })
+        self.repos
+            .iter()
+            .find(|r| r.repo == repo_ref || r.name() == repo_ref)
     }
 
     /// Get the self-repo config (the Karna instance itself), if configured.
@@ -480,7 +612,10 @@ impl Config {
         let mut servers = serde_json::Map::new();
         for server in &self.mcp_servers {
             let mut entry = serde_json::Map::new();
-            let is_remote = matches!(server.r#type.as_deref(), Some("sse") | Some("http") | Some("remote"));
+            let is_remote = matches!(
+                server.r#type.as_deref(),
+                Some("sse") | Some("http") | Some("remote")
+            );
 
             if is_remote {
                 entry.insert("type".into(), "remote".into());
@@ -532,9 +667,8 @@ impl Config {
         };
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/agent".to_string());
         let dir = std::path::Path::new(&home).join(".config/opencode");
-        std::fs::create_dir_all(&dir).with_context(|| {
-            format!("Failed to create opencode config dir: {}", dir.display())
-        })?;
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("Failed to create opencode config dir: {}", dir.display()))?;
         let path = dir.join("opencode.json");
         let content = serde_json::to_string_pretty(&cfg)?;
         std::fs::write(&path, content)

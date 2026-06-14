@@ -170,7 +170,9 @@ pub async fn scan_task(db: &Database, task: &AgentTask) -> Result<Option<Value>>
             // Multi-repo parent: only consider policies that target all repos.
             policy.repo_pattern == "*"
         } else {
-            task_repos.iter().any(|r| repo_match(&policy.repo_pattern, r))
+            task_repos
+                .iter()
+                .any(|r| repo_match(&policy.repo_pattern, r))
         };
         if !repo_ok {
             continue;
@@ -212,4 +214,3 @@ pub async fn scan_and_persist(db: &Database, task: &AgentTask) {
         Err(e) => warn!(error = %e, task_id = %task.id, "Policy scan failed"),
     }
 }
-

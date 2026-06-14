@@ -1,6 +1,10 @@
 use std::net::SocketAddr;
 
-use axum::{middleware, routing::{get, patch, post}, Router};
+use axum::{
+    middleware,
+    routing::{get, patch, post},
+    Router,
+};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
@@ -20,7 +24,12 @@ pub struct AppState {
 fn parse_bool_env(name: &str) -> bool {
     std::env::var(name)
         .ok()
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -35,8 +44,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let database_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let redis_url =
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     let port: u16 = std::env::var("PORT")
@@ -64,12 +72,21 @@ async fn main() -> anyhow::Result<()> {
 
     let api = Router::new()
         // Tasks
-        .route("/tasks", get(routes::tasks::list).post(routes::tasks::create))
+        .route(
+            "/tasks",
+            get(routes::tasks::list).post(routes::tasks::create),
+        )
+        .route("/chats", get(routes::tasks::list_chats))
+        .route(
+            "/orchestrator-tasks",
+            post(routes::tasks::create_orchestrator_task),
+        )
         .route(
             "/tasks/{id}",
             patch(routes::tasks::update).delete(routes::tasks::delete),
         )
         .route("/tasks/{id}/logs", get(routes::tasks::logs))
+        .route("/tasks/{id}/logs/stream", get(routes::tasks::logs_stream))
         .route("/tasks/{id}/comments", post(routes::tasks::post_comment))
         .route(
             "/tasks/{id}/subtasks",
@@ -94,9 +111,15 @@ async fn main() -> anyhow::Result<()> {
         )
         // Repos
         .route("/repos", get(routes::repos::list).post(routes::repos::add))
-        .route("/repos/{id}", patch(routes::repos::update).delete(routes::repos::delete))
+        .route(
+            "/repos/{id}",
+            patch(routes::repos::update).delete(routes::repos::delete),
+        )
         .route("/repos/{id}/onboard", post(routes::repos::trigger_onboard))
-        .route("/repos/{id}/webhook", post(routes::repos::trigger_webhook_register))
+        .route(
+            "/repos/{id}/webhook",
+            post(routes::repos::trigger_webhook_register),
+        )
         .route("/repos/{id}/reviews", get(routes::repos::list_reviews))
         .route(
             "/repos/{id}/reviews/{review_id}/logs",
@@ -109,7 +132,10 @@ async fn main() -> anyhow::Result<()> {
         // Users (for assignee dropdown)
         .route("/users", get(routes::users::list))
         // Agent profiles (pseudo-users)
-        .route("/agents", get(routes::agents::list).post(routes::agents::create))
+        .route(
+            "/agents",
+            get(routes::agents::list).post(routes::agents::create),
+        )
         .route(
             "/agents/{id}",
             get(routes::agents::get)
@@ -122,7 +148,10 @@ async fn main() -> anyhow::Result<()> {
         // Unified assignee picker (humans + agents)
         .route("/assignables", get(routes::agents::assignables))
         // Policies (advisory guardrails on plan_review)
-        .route("/policies", get(routes::policies::list).post(routes::policies::create))
+        .route(
+            "/policies",
+            get(routes::policies::list).post(routes::policies::create),
+        )
         .route(
             "/policies/{id}",
             patch(routes::policies::update).delete(routes::policies::delete),

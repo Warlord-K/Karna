@@ -84,8 +84,7 @@ struct RawMcpServer {
 }
 
 pub fn load() -> Result<ApiConfig> {
-    let config_path = std::env::var("CONFIG_PATH")
-        .unwrap_or_else(|_| "config.yaml".to_string());
+    let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| "config.yaml".to_string());
 
     let raw: RawConfig = match fs::read_to_string(&config_path) {
         Ok(content) => serde_yaml::from_str(&content)?,

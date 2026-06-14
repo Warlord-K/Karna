@@ -11,9 +11,7 @@ pub struct UserSummary {
     pub email: Option<String>,
 }
 
-pub async fn list(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<UserSummary>>, StatusCode> {
+pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<UserSummary>>, StatusCode> {
     let rows = state
         .db
         .list_users()

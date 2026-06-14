@@ -49,10 +49,7 @@ pub fn summarize_tool_input(tool: &str, input: &serde_json::Value) -> String {
             .map(shorten_path)
             .unwrap_or_default(),
         "Grep" => {
-            let pattern = input
-                .get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let pattern = input.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
             let path = input.get("path").and_then(|v| v.as_str()).map(shorten_path);
             match path {
                 Some(p) => format!("\"{pattern}\" in {p}"),
@@ -65,10 +62,7 @@ pub fn summarize_tool_input(tool: &str, input: &serde_json::Value) -> String {
             .unwrap_or("")
             .to_string(),
         "Bash" => {
-            let cmd = input
-                .get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let cmd = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
             if cmd.len() > 120 {
                 format!("{}…", &cmd[..120])
             } else {
@@ -104,6 +98,8 @@ pub async fn run(backend: &str, opts: CliOptions<'_>) -> Result<CliResult> {
     match backend {
         "codex" => crate::codex::run(opts).await,
         "opencode" => crate::opencode::run(opts).await,
+        "cursor" => crate::cursor::run(opts).await,
+        "grok" => crate::grok::run(opts).await,
         _ => crate::claude::run(opts).await,
     }
 }

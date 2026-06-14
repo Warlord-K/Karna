@@ -22,12 +22,18 @@ pub async fn create_pr(
     let output = Command::new("gh")
         .current_dir(worktree_path)
         .args([
-            "pr", "create",
-            "--repo", repo,
-            "--head", branch,
-            "--base", base_branch,
-            "--title", title,
-            "--body", body,
+            "pr",
+            "create",
+            "--repo",
+            repo,
+            "--head",
+            branch,
+            "--base",
+            base_branch,
+            "--title",
+            title,
+            "--body",
+            body,
         ])
         .output()
         .await
@@ -48,18 +54,17 @@ pub async fn create_pr(
     let number = extract_pr_number(&pr_url).unwrap_or(0);
 
     info!(pr_url = %pr_url, number, "PR created");
-    Ok(PrInfo { url: pr_url, number })
+    Ok(PrInfo {
+        url: pr_url,
+        number,
+    })
 }
 
 /// Get an existing PR for a branch.
 async fn get_existing_pr(worktree_path: &Path, repo: &str, branch: &str) -> Result<PrInfo> {
     let output = Command::new("gh")
         .current_dir(worktree_path)
-        .args([
-            "pr", "view", branch,
-            "--repo", repo,
-            "--json", "url,number",
-        ])
+        .args(["pr", "view", branch, "--repo", repo, "--json", "url,number"])
         .output()
         .await?;
 
@@ -81,10 +86,13 @@ pub async fn get_pr_comments(
     let output = Command::new("gh")
         .current_dir(worktree_path)
         .args([
-            "pr", "view",
+            "pr",
+            "view",
             &pr_number.to_string(),
-            "--repo", repo,
-            "--json", "reviews,comments",
+            "--repo",
+            repo,
+            "--json",
+            "reviews,comments",
         ])
         .output()
         .await?;
@@ -168,7 +176,12 @@ pub async fn ensure_repo_webhook(
 
     // Check if a webhook already exists for this URL
     let list_output = Command::new("gh")
-        .args(["api", &format!("repos/{repo}/hooks"), "--jq", ".[].config.url"])
+        .args([
+            "api",
+            &format!("repos/{repo}/hooks"),
+            "--jq",
+            ".[].config.url",
+        ])
         .output()
         .await
         .context("Failed to list repo webhooks")?;
@@ -194,15 +207,24 @@ pub async fn ensure_repo_webhook(
     let mut args = vec![
         "api".to_string(),
         format!("repos/{repo}/hooks"),
-        "--method".to_string(), "POST".to_string(),
-        "-f".to_string(), format!("config[url]={hook_target}"),
-        "-f".to_string(), "config[content_type]=json".to_string(),
-        "-f".to_string(), "config[insecure_ssl]=0".to_string(),
-        "-F".to_string(), "active=true".to_string(),
-        "-f".to_string(), "events[]=pull_request_review".to_string(),
-        "-f".to_string(), "events[]=issue_comment".to_string(),
-        "-f".to_string(), "events[]=pull_request".to_string(),
-        "-f".to_string(), "events[]=issues".to_string(),
+        "--method".to_string(),
+        "POST".to_string(),
+        "-f".to_string(),
+        format!("config[url]={hook_target}"),
+        "-f".to_string(),
+        "config[content_type]=json".to_string(),
+        "-f".to_string(),
+        "config[insecure_ssl]=0".to_string(),
+        "-F".to_string(),
+        "active=true".to_string(),
+        "-f".to_string(),
+        "events[]=pull_request_review".to_string(),
+        "-f".to_string(),
+        "events[]=issue_comment".to_string(),
+        "-f".to_string(),
+        "events[]=pull_request".to_string(),
+        "-f".to_string(),
+        "events[]=issues".to_string(),
     ];
     if let Some(s) = secret {
         args.push("-f".to_string());
@@ -227,5 +249,8 @@ pub async fn ensure_repo_webhook(
     }
 
     info!(repo, url = %hook_target, "Webhook registered");
-    Ok(WebhookEnsureResult { matched_url: hook_target, created: true })
+    Ok(WebhookEnsureResult {
+        matched_url: hook_target,
+        created: true,
+    })
 }

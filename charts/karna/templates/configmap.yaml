@@ -22,6 +22,7 @@ data:
     agent:
       max_turns: {{ .Values.config.maxTurns }}
       poll_interval_secs: {{ .Values.config.pollIntervalSecs }}
+      max_review_rounds: {{ .Values.config.maxReviewRounds }}
       max_concurrent_tasks: {{ .Values.config.maxConcurrentTasks }}
       {{- if .Values.config.instructions }}
       instructions: /etc/karna/instructions.md
@@ -32,6 +33,32 @@ data:
           models: {{ toJson $backend.models }}
           default_model: {{ $backend.default_model }}
         {{- end }}
+
+    {{- if .Values.config.memory.enabled }}
+    memory:
+      enabled: {{ .Values.config.memory.enabled }}
+      url: {{ include "karna.memoryUrl" . | quote }}
+      max_items: {{ .Values.config.memory.maxItems }}
+      max_chars: {{ .Values.config.memory.maxChars }}
+    {{- end }}
+
+    {{- if .Values.config.slack.enabled }}
+    slack:
+      enabled: {{ .Values.config.slack.enabled }}
+      {{- if .Values.config.slack.defaultChannel }}
+      default_channel: {{ .Values.config.slack.defaultChannel | quote }}
+      {{- end }}
+      dm_user_ids: {{ toJson .Values.config.slack.dmUserIds }}
+      allowed_user_ids: {{ toJson .Values.config.slack.allowedUserIds }}
+      {{- if .Values.config.slack.userMap }}
+      user_map:
+        {{- range $slackUser, $karnaUser := .Values.config.slack.userMap }}
+        {{ $slackUser | quote }}: {{ $karnaUser | quote }}
+        {{- end }}
+      {{- else }}
+      user_map: {}
+      {{- end }}
+    {{- end }}
 
     {{- if .Values.config.mcpServers }}
     mcp_servers:

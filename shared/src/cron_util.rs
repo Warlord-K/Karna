@@ -21,7 +21,9 @@ pub fn normalize(expr: &str) -> String {
 /// Returns the underlying parser error message on failure.
 pub fn validate(expr: &str) -> Result<(), String> {
     let normalized = normalize(expr);
-    CronSchedule::from_str(&normalized).map(|_| ()).map_err(|e| e.to_string())
+    CronSchedule::from_str(&normalized)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

@@ -1,12 +1,12 @@
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    routing::{get, post, delete},
+    routing::{delete, get, post},
     Json, Router,
 };
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
 use serde::Deserialize;
+use sha2::Sha256;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -18,7 +18,11 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// Verify the GitHub webhook signature (X-Hub-Signature-256 header).
 /// Returns true if no secret is configured (verification disabled).
-fn verify_webhook_signature(secret: Option<&str>, signature_header: Option<&str>, body: &[u8]) -> bool {
+fn verify_webhook_signature(
+    secret: Option<&str>,
+    signature_header: Option<&str>,
+    body: &[u8],
+) -> bool {
     let secret = match secret {
         Some(s) => s,
         None => return true, // No secret configured — accept all
@@ -89,7 +93,12 @@ async fn health() -> &'static str {
 }
 
 async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let has_active = !state.db.active_task_ids().await.unwrap_or_default().is_empty();
+    let has_active = !state
+        .db
+        .active_task_ids()
+        .await
+        .unwrap_or_default()
+        .is_empty();
     let next = state.db.next_actionable_task().await.ok().flatten();
 
     Json(serde_json::json!({
@@ -105,7 +114,11 @@ async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
 // --- Repo profile endpoints ---
 
 async fn list_repos(State(state): State<AppState>) -> Result<Json<serde_json::Value>, StatusCode> {
-    let profiles = state.db.get_all_repo_profiles().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let profiles = state
+        .db
+        .get_all_repo_profiles()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(serde_json::json!(profiles)))
 }
 
@@ -124,11 +137,15 @@ async fn add_repo(
     State(state): State<AppState>,
     Json(body): Json<AddRepoRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let user_id = state.db.first_user_id().await
+    let user_id = state
+        .db
+        .first_user_id()
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::BAD_REQUEST)?;
 
-    let profile = state.db
+    let profile = state
+        .db
         .upsert_repo_profile(user_id, &body.repo, &body.branch)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -147,10 +164,7 @@ async fn add_repo(
     Ok(Json(serde_json::json!(profile)))
 }
 
-async fn delete_repo(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> StatusCode {
+async fn delete_repo(State(state): State<AppState>, Path(id): Path<Uuid>) -> StatusCode {
     match state.db.delete_repo_profile(id).await {
         Ok(()) => StatusCode::NO_CONTENT,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -200,12 +214,14 @@ async fn trigger_webhook_register(
     }
 }
 
-async fn trigger_onboard(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> StatusCode {
+async fn trigger_onboard(State(state): State<AppState>, Path(id): Path<Uuid>) -> StatusCode {
     // Set status back to pending so sync picks it up
-    if state.db.set_repo_profile_status(id, "pending").await.is_err() {
+    if state
+        .db
+        .set_repo_profile_status(id, "pending")
+        .await
+        .is_err()
+    {
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
 
@@ -261,17 +277,29 @@ async fn github_webhook(
     // `user.type == "Bot"` and would otherwise add noise to whichever path
     // we'd route the event to next.
     if event == "issue_comment" || event == "pull_request_review_comment" {
-        let kind = payload.pointer("/comment/user/type").and_then(|v| v.as_str()).unwrap_or("");
+        let kind = payload
+            .pointer("/comment/user/type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if kind == "Bot" {
-            let login = payload.pointer("/comment/user/login").and_then(|v| v.as_str()).unwrap_or("");
+            let login = payload
+                .pointer("/comment/user/login")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             info!(event, bot = login, "Webhook: ignoring bot comment");
             return StatusCode::OK;
         }
     }
     if event == "pull_request_review" {
-        let kind = payload.pointer("/review/user/type").and_then(|v| v.as_str()).unwrap_or("");
+        let kind = payload
+            .pointer("/review/user/type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if kind == "Bot" {
-            let login = payload.pointer("/review/user/login").and_then(|v| v.as_str()).unwrap_or("");
+            let login = payload
+                .pointer("/review/user/login")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             info!(event, bot = login, "Webhook: ignoring bot review");
             return StatusCode::OK;
         }
@@ -284,9 +312,11 @@ async fn github_webhook(
 
     // Non-agent branches (human-opened PRs) — route to the auto-reviewer
     // when the event is a PR open / re-open / synchronize. Drafts are skipped.
-    let is_agent_branch = branch.contains('/') && branch.split('/').next().is_some_and(|p| {
-        p.rfind('-').is_some_and(|i| p[i + 1..].chars().all(|c| c.is_ascii_digit()) && i > 0)
-    });
+    let is_agent_branch = branch.contains('/')
+        && branch.split('/').next().is_some_and(|p| {
+            p.rfind('-')
+                .is_some_and(|i| p[i + 1..].chars().all(|c| c.is_ascii_digit()) && i > 0)
+        });
     if !is_agent_branch {
         if event == "pull_request" && matches!(action, "opened" | "reopened" | "synchronize") {
             return handle_pr_review_trigger(&state, &payload, branch).await;
@@ -324,7 +354,7 @@ async fn github_webhook(
             .db
             .insert_log(task.id, "webhook", "PR merged, task complete", "info", None)
             .await;
-        let _ = crate::notifications::send_task_done(&state.config, &task).await;
+        let _ = crate::notifications::send_task_done(&state.config, &state.db, &task).await;
         return StatusCode::OK;
     }
 
@@ -395,7 +425,13 @@ async fn github_webhook(
             let _ = state.db.set_feedback(task.id, &combined).await;
             let _ = state
                 .db
-                .insert_log(task.id, "webhook", "PR comment added to feedback", "info", None)
+                .insert_log(
+                    task.id,
+                    "webhook",
+                    "PR comment added to feedback",
+                    "info",
+                    None,
+                )
                 .await;
         }
     }
@@ -424,18 +460,27 @@ async fn handle_pr_review_trigger(
         return StatusCode::OK;
     }
 
-    let repo = match payload.pointer("/repository/full_name").and_then(|v| v.as_str()) {
+    let repo = match payload
+        .pointer("/repository/full_name")
+        .and_then(|v| v.as_str())
+    {
         Some(r) => r,
         None => return StatusCode::OK,
     };
-    let pr_number = match payload.pointer("/pull_request/number").and_then(|v| v.as_i64()) {
+    let pr_number = match payload
+        .pointer("/pull_request/number")
+        .and_then(|v| v.as_i64())
+    {
         Some(n) => n as i32,
         None => return StatusCode::OK,
     };
     let pr_url = payload
         .pointer("/pull_request/html_url")
         .and_then(|v| v.as_str());
-    let head_sha = match payload.pointer("/pull_request/head/sha").and_then(|v| v.as_str()) {
+    let head_sha = match payload
+        .pointer("/pull_request/head/sha")
+        .and_then(|v| v.as_str())
+    {
         Some(s) => s,
         None => return StatusCode::OK,
     };
@@ -461,7 +506,10 @@ async fn handle_pr_review_trigger(
 }
 
 async fn handle_issue_opened(state: &AppState, payload: &serde_json::Value) -> StatusCode {
-    let repo_name = match payload.pointer("/repository/full_name").and_then(|v| v.as_str()) {
+    let repo_name = match payload
+        .pointer("/repository/full_name")
+        .and_then(|v| v.as_str())
+    {
         Some(r) => r,
         None => return StatusCode::OK,
     };
@@ -475,15 +523,34 @@ async fn handle_issue_opened(state: &AppState, payload: &serde_json::Value) -> S
         return StatusCode::OK;
     }
 
-    let issue_number = payload.pointer("/issue/number").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-    let issue_title = payload.pointer("/issue/title").and_then(|v| v.as_str()).unwrap_or("Untitled");
-    let issue_body = payload.pointer("/issue/body").and_then(|v| v.as_str()).unwrap_or("");
-    let issue_url = payload.pointer("/issue/html_url").and_then(|v| v.as_str()).unwrap_or("");
+    let issue_number = payload
+        .pointer("/issue/number")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+    let issue_title = payload
+        .pointer("/issue/title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Untitled");
+    let issue_body = payload
+        .pointer("/issue/body")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let issue_url = payload
+        .pointer("/issue/html_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     // Deduplicate: check if a task already exists for this issue
-    match state.db.find_task_by_github_issue(repo_name, issue_number).await {
+    match state
+        .db
+        .find_task_by_github_issue(repo_name, issue_number)
+        .await
+    {
         Ok(Some(_)) => {
-            info!(repo = repo_name, issue_number, "Task already exists for issue, skipping");
+            info!(
+                repo = repo_name,
+                issue_number, "Task already exists for issue, skipping"
+            );
             return StatusCode::OK;
         }
         Err(e) => {
@@ -502,17 +569,42 @@ async fn handle_issue_opened(state: &AppState, payload: &serde_json::Value) -> S
     };
 
     let title = format!("GH-{}: {}", issue_number, issue_title);
-    let body_truncated = if issue_body.len() > 10_000 { &issue_body[..10_000] } else { issue_body };
+    let body_truncated = if issue_body.len() > 10_000 {
+        &issue_body[..10_000]
+    } else {
+        issue_body
+    };
     let description = if issue_url.is_empty() {
         body_truncated.to_string()
     } else {
         format!("{}\n\n---\n_Opened from: {}_", body_truncated, issue_url)
     };
 
-    match state.db.create_task(user_id, &title, Some(&description), Some(repo_name), "medium", None, None).await {
+    match state
+        .db
+        .create_task(
+            user_id,
+            &title,
+            Some(&description),
+            Some(repo_name),
+            "medium",
+            None,
+            None,
+        )
+        .await
+    {
         Ok(task) => {
             info!(task_id = %task.id, repo = repo_name, issue_number, "Created task from GitHub issue");
-            let _ = state.db.insert_log(task.id, "webhook", &format!("Task created from GitHub issue #{issue_number}"), "info", None).await;
+            let _ = state
+                .db
+                .insert_log(
+                    task.id,
+                    "webhook",
+                    &format!("Task created from GitHub issue #{issue_number}"),
+                    "info",
+                    None,
+                )
+                .await;
             StatusCode::OK
         }
         Err(e) => {

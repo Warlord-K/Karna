@@ -20,6 +20,7 @@ agent:
   max_turns: 100                   # Max CLI turns per invocation (Claude only, ignored by Codex)
   poll_interval_secs: 30           # How often to check for new tasks
   max_concurrent_tasks: 1          # Per worker instance (increase with --scale)
+  max_review_rounds: 3             # Implement ↔ self-review rounds before shipping (0 disables)
 
   # Path to a markdown file with agent instructions. Injected as system prompt
   # into every CLI invocation (planning, implementation, feedback). Use this to
@@ -50,6 +51,46 @@ agent:
         - openrouter/qwen/qwen3-coder
         - openrouter/anthropic/claude-sonnet-4.6
       default_model: openrouter/moonshotai/kimi-k2.6
+    # cursor-agent — uses a Cursor subscription login on the agent host
+    # (run `cursor-agent login` once). Models are passed verbatim to
+    # `cursor-agent --model`; run `cursor-agent models` to list them.
+    cursor:
+      models: [sonnet-4.5, gpt-5, auto]
+      default_model: sonnet-4.5
+    # grok — uses a grok.com subscription login on the agent host
+    # (run `grok login` once). Run `grok models` to list available models.
+    grok:
+      models: [grok-build]
+      default_model: grok-build
+
+# ──────────────────────────────────────────────────────────
+# Memory (mem0, optional)
+# ──────────────────────────────────────────────────────────
+# Off by default. When enabled, planner/implementer prompts include a
+# `## Memory` section with relevant snippets, and done tasks write back a short
+# summary of decisions/gotchas.
+memory:
+  enabled: false
+  url: http://localhost:8888
+  max_items: 8         # Max snippets injected per prompt
+  max_chars: 2000      # Character budget for injected memory section
+
+# ──────────────────────────────────────────────────────────
+# Slack control plane (optional)
+# ──────────────────────────────────────────────────────────
+# Requires SLACK_BOT_TOKEN + SLACK_APP_TOKEN in .env.
+slack:
+  enabled: false
+  # Channel id where agent updates are posted when a task has no existing
+  # thread mapping (for example, tasks created from webhooks/UI).
+  # default_channel: C0123456789
+  default_channel: null
+  # Allowlist of Slack user IDs allowed to drive Karna in Slack.
+  allowed_user_ids: []
+  # Map Slack user IDs to Karna user UUIDs.
+  # user_map:
+  #   U0123456789: 00000000-0000-0000-0000-000000000000
+  user_map: {}
 
 # ──────────────────────────────────────────────────────────
 # Commit Signing (optional, auto-detected)
@@ -150,6 +191,13 @@ mcp_servers:
   #   args: ["-y", "@linear/mcp-server"]
   #   env:
   #     LINEAR_API_KEY: "${LINEAR_API_KEY}"
+
+  # Generic token-based MCP server example
+  # - name: generic-token-server
+  #   command: npx
+  #   args: ["-y", "@example/mcp-server"]
+  #   env:
+  #     EXAMPLE_MCP_TOKEN: "${EXAMPLE_MCP_TOKEN}"
 
   # Slack — post status updates, ask questions
   # - name: slack

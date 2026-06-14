@@ -1,0 +1,221 @@
+{{- if .Values.mem0.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "karna.fullname" . }}-mem0-postgres
+  labels:
+    {{- include "karna.componentLabels" (dict "context" . "component" "mem0-postgres") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    {{- include "karna.selectorLabels" (dict "context" . "component" "mem0-postgres") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "karna.fullname" . }}-mem0-postgres
+  labels:
+    {{- include "karna.componentLabels" (dict "context" . "component" "mem0-postgres") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "karna.selectorLabels" (dict "context" . "component" "mem0-postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "karna.selectorLabels" (dict "context" . "component" "mem0-postgres") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mem0-postgres
+          image: {{ include "karna.image" (dict "image" .Values.mem0.postgres.image "global" .Values.global "appVersion" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.mem0.postgres.image.pullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.mem0.postgres.auth.username | quote }}
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.mem0.postgres.auth.password | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.mem0.postgres.auth.database | quote }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          {{- with .Values.mem0.postgres.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: data
+          {{- if .Values.mem0.postgres.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "karna.fullname" . }}-mem0-postgres
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "karna.fullname" . }}-mem0
+  labels:
+    {{- include "karna.componentLabels" (dict "context" . "component" "mem0") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "karna.selectorLabels" (dict "context" . "component" "mem0") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "karna.fullname" . }}-mem0
+  labels:
+    {{- include "karna.componentLabels" (dict "context" . "component" "mem0") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "karna.selectorLabels" (dict "context" . "component" "mem0") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "karna.selectorLabels" (dict "context" . "component" "mem0") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mem0
+          image: {{ include "karna.image" (dict "image" .Values.mem0.api.image "global" .Values.global "appVersion" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.mem0.api.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: LLM_PROVIDER
+              value: {{ .Values.mem0.llm.provider | quote }}
+            - name: LLM_MODEL
+              value: {{ .Values.mem0.llm.model | quote }}
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "karna.mem0ApiKeySecretName" . }}
+                  key: {{ include "karna.mem0ApiKeySecretKey" . }}
+                  optional: true
+            - name: LLM_BASE_URL
+              value: {{ .Values.mem0.llm.baseUrl | quote }}
+            - name: EMBEDDER_PROVIDER
+              value: {{ .Values.mem0.embedder.provider | quote }}
+            - name: EMBEDDER_MODEL
+              value: {{ .Values.mem0.embedder.model | quote }}
+            - name: EMBEDDER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "karna.mem0ApiKeySecretName" . }}
+                  key: {{ include "karna.mem0ApiKeySecretKey" . }}
+                  optional: true
+            - name: EMBEDDER_BASE_URL
+              value: {{ .Values.mem0.embedder.baseUrl | quote }}
+            # Compatibility envs for mem0 code paths that read OPENAI_/OPENROUTER_
+            # directly (for example when DB config omits explicit base URLs).
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "karna.mem0ApiKeySecretName" . }}
+                  key: {{ include "karna.mem0ApiKeySecretKey" . }}
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "karna.mem0ApiKeySecretName" . }}
+                  key: {{ include "karna.mem0ApiKeySecretKey" . }}
+                  optional: true
+            - name: OPENAI_BASE_URL
+              value: {{ default "" (coalesce .Values.mem0.embedder.baseUrl .Values.mem0.llm.baseUrl) | quote }}
+            - name: JWT_SECRET
+              value: {{ .Values.mem0.jwtSecret | quote }}
+            - name: AUTH_DISABLED
+              value: {{ .Values.mem0.authDisabled | quote }}
+            - name: POSTGRES_HOST
+              value: {{ printf "%s-mem0-postgres" (include "karna.fullname" .) | quote }}
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_USER
+              value: {{ .Values.mem0.postgres.auth.username | quote }}
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.mem0.postgres.auth.password | quote }}
+            - name: APP_DB_NAME
+              value: {{ .Values.mem0.postgres.auth.database | quote }}
+            - name: MEM0_TELEMETRY
+              value: {{ .Values.mem0.telemetry | quote }}
+          volumeMounts:
+            - name: history
+              mountPath: /app/history
+          {{- with .Values.mem0.api.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: history
+          {{- if .Values.mem0.history.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "karna.fullname" . }}-mem0-history
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- if .Values.mem0.postgres.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "karna.fullname" . }}-mem0-postgres
+  labels:
+    {{- include "karna.componentLabels" (dict "context" . "component" "mem0-postgres") | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.mem0.postgres.persistence.storageClass }}
+  storageClassName: {{ .Values.mem0.postgres.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.mem0.postgres.persistence.size }}
+{{- end }}
+{{- if .Values.mem0.history.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "karna.fullname" . }}-mem0-history
+  labels:
+    {{- include "karna.componentLabels" (dict "context" . "component" "mem0") | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.mem0.history.persistence.storageClass }}
+  storageClassName: {{ .Values.mem0.history.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.mem0.history.persistence.size }}
+{{- end }}
+{{- end }}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   AgentTask,
@@ -8,6 +8,8 @@ import {
   AgentTaskPriority,
   AgentTaskStatus,
   UserSummary,
+  buildLogStreamUrl,
+  encodeLogCursor,
   hasSubtaskDefinitions,
   getTaskLabel,
   getTaskTitle,
@@ -23,14 +25,16 @@ import {
   usePostComment,
   useUsers,
   useAgents,
+  mergeTaskLogs,
 } from '@/hooks/use-tasks';
 import {
   ArrowLeft, Trash, GitPullRequest, ArrowSquareOut, Check, X, Prohibit,
   ChatText, Article, FileText, Lightning, WarningCircle, ArrowCounterClockwise,
-  Clock, Stack, Terminal, Robot, User,
+  Clock, Stack, Terminal, Robot, User, CaretDown,
 } from '@phosphor-icons/react';
 import toast from 'react-hot-toast';
 import { MarkdownEditor } from '@/components/agent/markdown-editor';
+import { MarkdownContent } from '@/components/agent/markdown-content';
 import { TaskAttachments } from '@/components/agent/task-attachments';
 import { formatDistanceToNow, format } from 'date-fns';
 import { useSession } from 'next-auth/react';
@@ -51,13 +55,17 @@ export default function TaskDetailPage() {
   const [comment, setComment] = useState('');
   const commentRef = useRef<HTMLTextAreaElement>(null);
   const [loading, setLoading] = useState(false);
+  const [streamLogs, setStreamLogs] = useState<AgentLog[]>([]);
+  const [streamStatus, setStreamStatus] = useState<'idle' | 'connecting' | 'open' | 'fallback'>('idle');
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   const { data: tasks = [] } = useTasks(isReady);
   const task = tasks.find(t => t.id === id) ?? null;
 
   const { data: subtasks = [] } = useSubtasks(id, activeTab === 'subtasks');
-  const { data: logs = [], isLoading: logsLoading } = useLogs(id, activeTab === 'activity');
+  const shouldPollLogs = activeTab === 'activity' && streamStatus !== 'open';
+  const { data: polledLogs = [], isLoading: logsLoading } = useLogs(id, shouldPollLogs);
+  const logs = useMemo(() => mergeTaskLogs(polledLogs, streamLogs), [polledLogs, streamLogs]);
   const { data: users = [] } = useUsers(isReady);
   const { data: agents = [] } = useAgents(isReady);
   const updateTaskMutation = useUpdateTask();
@@ -72,12 +80,58 @@ export default function TaskDetailPage() {
       prevTaskId.current = task.id;
       setActiveTab(task.plan_content ? 'plan' : 'details');
       setComment('');
+      setStreamLogs([]);
+      setStreamStatus('idle');
     }
   }, [task]);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
+
+  useEffect(() => {
+    if (activeTab !== 'activity') {
+      setStreamStatus('idle');
+      return;
+    }
+    if (typeof window === 'undefined' || typeof window.EventSource === 'undefined') {
+      setStreamStatus('fallback');
+      return;
+    }
+
+    setStreamStatus('connecting');
+    const source = new EventSource(buildLogStreamUrl(id, encodeLogCursor(logs[logs.length - 1])));
+    let closed = false;
+
+    const onLogData = (raw: string) => {
+      try {
+        const next = JSON.parse(raw) as AgentLog;
+        if (!next?.id) return;
+        setStreamLogs((current) => mergeTaskLogs(current, [next]));
+      } catch {
+        // Ignore malformed events and continue streaming.
+      }
+    };
+
+    source.addEventListener('log', (event: MessageEvent) => onLogData(event.data));
+    source.onmessage = (event) => onLogData(event.data);
+    source.onopen = () => {
+      setStreamStatus('open');
+    };
+    source.onerror = () => {
+      if (closed) return;
+      closed = true;
+      source.close();
+      setStreamStatus('fallback');
+    };
+
+    return () => {
+      closed = true;
+      source.close();
+    };
+  // The stream should reconnect only when switching tasks/tabs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, activeTab]);
 
   if (!task) {
     return (
@@ -136,6 +190,16 @@ export default function TaskDetailPage() {
     setActiveTab('activity');
     setTimeout(() => commentRef.current?.focus(), 100);
     toast('Add a comment with your feedback', { icon: '\uD83D\uDCAC' });
+  };
+
+  const handleApproveReview = async () => {
+    setLoading(true);
+    try {
+      await onUpdate({ status: 'done' });
+      toast.success('Marked as done');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handlePostComment = async () => {
@@ -473,6 +537,63 @@ export default function TaskDetailPage() {
 
         {activeTab === 'activity' && (
           <div className="flex flex-col">
+            <div className="flex items-center justify-between mb-3 text-[12px]">
+              <span className="text-gray-8">Live thread</span>
+              <span className={`font-medium ${
+                streamStatus === 'open'
+                  ? 'text-green-400'
+                  : streamStatus === 'fallback'
+                    ? 'text-amber-300'
+                    : 'text-gray-7'
+              }`}>
+                {streamStatus === 'open'
+                  ? 'Streaming'
+                  : streamStatus === 'fallback'
+                    ? 'Polling fallback'
+                    : 'Connecting...'}
+              </span>
+            </div>
+
+            {(task.status === 'plan_review' || task.status === 'review') && (
+              <div className="flex flex-wrap gap-2.5 mb-4 p-3 rounded-lg border border-gray-4 bg-gray-2">
+                {task.status === 'plan_review' ? (
+                  <>
+                    <button
+                      onClick={handleApprovePlan}
+                      disabled={loading}
+                      className="h-9 px-4 text-[13px] font-medium text-white bg-green-600 hover:bg-green-500 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+                    >
+                      <Check size={15} weight="bold" /> Approve Plan
+                    </button>
+                    <button
+                      onClick={handleRejectPlan}
+                      disabled={loading}
+                      className="h-9 px-4 text-[13px] text-gray-9 hover:text-gray-12 hover:bg-gray-3 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+                    >
+                      <X size={15} weight="bold" /> Request Changes
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={handleApproveReview}
+                      disabled={loading}
+                      className="h-9 px-4 text-[13px] font-medium text-white bg-green-600 hover:bg-green-500 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+                    >
+                      <Check size={15} weight="bold" /> Approve & Mark Done
+                    </button>
+                    <button
+                      onClick={handleRejectPlan}
+                      disabled={loading}
+                      className="h-9 px-4 text-[13px] text-gray-9 hover:text-gray-12 hover:bg-gray-3 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+                    >
+                      <X size={15} weight="bold" /> Request Changes
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+
             {logsLoading && logs.length === 0 ? (
               <div className="flex items-center justify-center py-20 text-gray-8 gap-2 text-[14px]">
                 <Lightning size={18} weight="fill" className="animate-pulse" /> Loading...
@@ -483,8 +604,8 @@ export default function TaskDetailPage() {
                 <p className="text-[14px]">No activity yet</p>
               </div>
             ) : (
-              <div className="font-mono text-[12px] sm:text-[13px] leading-[1.6] sm:leading-[1.8] bg-gray-2 border border-gray-4 rounded-lg p-3 sm:p-4 overflow-x-auto mb-4">
-                {logs.map((log) => <LogLine key={log.id} log={log} />)}
+              <div className="bg-gray-2 border border-gray-4 rounded-lg p-3 sm:p-4 mb-4">
+                <ThreadView logs={logs} />
                 <div ref={logsEndRef} />
               </div>
             )}
@@ -542,22 +663,78 @@ function StatusBadge({ status }: { status: AgentTaskStatus }) {
   );
 }
 
-const logColors: Record<string, string> = {
-  info: 'text-gray-10',
-  error: 'text-red-400',
-  command: 'text-blue-400',
-  output: 'text-gray-8',
-  claude: 'text-sun-10',
-  tool: 'text-sun-8',
-  comment: 'text-gray-12',
+const phaseLabels: Record<string, string> = {
+  plan: 'Plan',
+  planning: 'Plan',
+  implement: 'Implement',
+  in_progress: 'Implement',
+  self_review: 'Self Review',
+  review: 'Review',
+  feedback: 'Feedback',
+  user: 'Feedback',
 };
 
-function LogLine({ log }: { log: AgentLog }) {
+function phaseLabel(phase: string): string {
+  if (phaseLabels[phase]) return phaseLabels[phase];
+  return phase.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function looksLikeCodeOrDiff(message: string): boolean {
+  const trimmed = message.trim();
+  if (!trimmed) return false;
+  return (
+    trimmed.startsWith('diff --git')
+    || trimmed.startsWith('@@ ')
+    || trimmed.includes('\n@@ ')
+    || trimmed.startsWith('```')
+  );
+}
+
+function formatLogMessage(log: AgentLog): string {
+  const message = log.message?.trim() || '_No message_';
+  if (!looksLikeCodeOrDiff(message)) return message;
+  if (message.startsWith('```')) return message;
+  return `\`\`\`diff\n${message}\n\`\`\``;
+}
+
+function ThreadView({ logs }: { logs: AgentLog[] }) {
+  const sections = useMemo(() => {
+    const grouped: { phase: string; logs: AgentLog[] }[] = [];
+    for (const log of logs) {
+      const prev = grouped[grouped.length - 1];
+      if (prev && prev.phase === log.phase) {
+        prev.logs.push(log);
+      } else {
+        grouped.push({ phase: log.phase, logs: [log] });
+      }
+    }
+    return grouped;
+  }, [logs]);
+
+  return (
+    <div className="space-y-4">
+      {sections.map((section, idx) => (
+        <div key={`${section.phase}-${idx}`} className="space-y-2">
+          <div className="text-[11px] uppercase tracking-wider text-gray-7 font-medium">
+            {phaseLabel(section.phase)}
+          </div>
+          <div className="space-y-2">
+            {section.logs.map((log) => (
+              <ThreadMessage key={log.id} log={log} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ThreadMessage({ log }: { log: AgentLog }) {
   const time = format(new Date(log.created_at), 'HH:mm:ss');
 
   if (log.log_type === 'comment') {
     return (
-      <div className="my-1.5 rounded-lg bg-sun-3 border border-sun-5 px-3 py-2">
+      <div className="ml-auto max-w-[90%] rounded-lg bg-sun-3 border border-sun-5 px-3 py-2">
         <div className="flex items-center gap-2 mb-1">
           <ChatText size={13} weight="bold" className="text-sun-9 flex-shrink-0" />
           <span className="text-[11px] text-sun-9 font-medium">You</span>
@@ -568,15 +745,39 @@ function LogLine({ log }: { log: AgentLog }) {
     );
   }
 
-  const color = logColors[log.log_type] || 'text-gray-10';
+  if (log.log_type === 'tool') {
+    return (
+      <details className="rounded-lg border border-gray-4 bg-gray-3/60 px-3 py-2">
+        <summary className="list-none cursor-pointer flex items-center gap-2 text-[12px] text-sun-9">
+          <CaretDown size={13} weight="bold" className="text-sun-9" />
+          <span className="font-medium">Tool Call</span>
+          <span className="text-gray-8 truncate">{log.message}</span>
+          <span className="text-[11px] text-gray-7 ml-auto">{time}</span>
+        </summary>
+        <div className="mt-2 pt-2 border-t border-gray-4">
+          <p className="text-[12px] text-gray-10 break-all whitespace-pre-wrap font-mono">{log.message}</p>
+          {log.metadata && (
+            <pre className="mt-2 p-2 rounded bg-gray-2 border border-gray-4 text-[11px] text-gray-9 overflow-x-auto">
+              {JSON.stringify(log.metadata, null, 2)}
+            </pre>
+          )}
+        </div>
+      </details>
+    );
+  }
 
+  const isError = log.log_type === 'error';
   return (
-    <div className="flex flex-col sm:flex-row gap-0.5 sm:gap-3 hover:bg-gray-3 px-1.5 -mx-1.5 rounded-sm py-0.5 sm:py-0">
-      <div className="flex gap-2 sm:gap-3 flex-shrink-0">
-        <span className="text-gray-7 flex-shrink-0 select-none">{time}</span>
-        <span className="text-gray-7 flex-shrink-0 w-14 truncate">{log.phase}</span>
+    <div className={`rounded-lg border px-3 py-2 ${
+      isError ? 'border-red-500/30 bg-red-500/10' : 'border-gray-4 bg-gray-3/40'
+    }`}>
+      <div className="flex items-center gap-2 mb-1">
+        <span className={`text-[11px] font-medium ${isError ? 'text-red-300' : 'text-gray-8'}`}>
+          {isError ? 'Error' : 'Assistant'}
+        </span>
+        <span className="text-[11px] text-gray-7 ml-auto">{time}</span>
       </div>
-      <span className={`${color} break-all`}>{log.message}</span>
+      <MarkdownContent content={formatLogMessage(log)} className="text-[13px]" />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 use crate::cli::{self, CliOptions};
 use crate::config::Config;
@@ -23,10 +23,14 @@ pub async fn sync_repo_profiles(config: &Config, db: &Database) -> Result<()> {
         let existing = db.get_repo_profile(&repo_config.repo).await?;
         if existing.is_none() {
             info!(repo = %repo_config.repo, "Creating repo profile for config repo");
-            let profile = db.upsert_repo_profile(user_id, &repo_config.repo, &repo_config.branch).await?;
-            db.update_repo_sync_issues(profile.id, repo_config.sync_issues).await?;
+            let profile = db
+                .upsert_repo_profile(user_id, &repo_config.repo, &repo_config.branch)
+                .await?;
+            db.update_repo_sync_issues(profile.id, repo_config.sync_issues)
+                .await?;
         } else if let Some(profile) = existing {
-            db.update_repo_sync_issues(profile.id, repo_config.sync_issues).await?;
+            db.update_repo_sync_issues(profile.id, repo_config.sync_issues)
+                .await?;
         }
     }
 
@@ -38,7 +42,11 @@ pub async fn sync_repo_profiles(config: &Config, db: &Database) -> Result<()> {
         if profile.status != "pending" {
             continue;
         }
-        if !db.try_claim_repo_for_onboarding(profile.id).await.unwrap_or(false) {
+        if !db
+            .try_claim_repo_for_onboarding(profile.id)
+            .await
+            .unwrap_or(false)
+        {
             // Another pod owns this onboarding run.
             continue;
         }
@@ -47,7 +55,9 @@ pub async fn sync_repo_profiles(config: &Config, db: &Database) -> Result<()> {
             Ok(()) => info!(repo = %profile.repo, "Repo onboarded successfully"),
             Err(e) => {
                 error!(repo = %profile.repo, error = %e, "Failed to onboard repo");
-                let _ = db.set_repo_profile_error(profile.id, &format!("{e:#}")).await;
+                let _ = db
+                    .set_repo_profile_error(profile.id, &format!("{e:#}"))
+                    .await;
             }
         }
     }
@@ -60,7 +70,8 @@ pub async fn sync_repo_profiles(config: &Config, db: &Database) -> Result<()> {
 /// to `onboarding`) before invoking this — see [`try_claim_repo_for_onboarding`].
 async fn onboard_repo(config: &Config, db: &Database, profile: &RepoProfile) -> Result<()> {
     // Ensure repo is cloned
-    let repo_path = workspace::ensure_cloned(&config.repos_dir, &profile.repo, &config.github_token).await?;
+    let repo_path =
+        workspace::ensure_cloned(&config.repos_dir, &profile.repo, &config.github_token).await?;
     workspace::checkout_and_pull(&repo_path, &profile.branch).await?;
 
     // Get current commit SHA
@@ -77,33 +88,30 @@ async fn onboard_repo(config: &Config, db: &Database, profile: &RepoProfile) -> 
 
     info!(repo = %profile.repo, cli = cli_name, model = model, "Invoking CLI for repo onboarding");
 
-    let result = cli::run(cli_name, CliOptions {
-        working_dir: &repo_path,
-        prompt: &prompt,
-        system_prompt: None,
-        allowed_tools: Some("Read,Glob,Grep,Bash"),
-        max_turns: 30,
-        model,
-        mcp_config_json: None,
-        session_id: None,
-        resume: false,
-        event_tx: None,
-        image_paths: Vec::new(),
-    })
+    let result = cli::run(
+        cli_name,
+        CliOptions {
+            working_dir: &repo_path,
+            prompt: &prompt,
+            system_prompt: None,
+            allowed_tools: Some("Read,Glob,Grep,Bash"),
+            max_turns: 30,
+            model,
+            mcp_config_json: None,
+            session_id: None,
+            resume: false,
+            event_tx: None,
+            image_paths: Vec::new(),
+        },
+    )
     .await?;
 
     // Parse structured profile from output
     let profile_json = parse_profile_json(&result.output);
     let summary = extract_summary(&result.output);
 
-    db.set_repo_profile_data(
-        profile.id,
-        &summary,
-        profile_json,
-        &sha,
-        result.cost_usd,
-    )
-    .await?;
+    db.set_repo_profile_data(profile.id, &summary, profile_json, &sha, result.cost_usd)
+        .await?;
 
     // Auto-register GitHub webhook (idempotent) and persist the outcome
     // so the UI can show whether issue sync actually works for this repo.
@@ -150,12 +158,7 @@ pub async fn register_webhook(
                 "Failed to register webhook (missing admin:repo_hook scope?)");
             let err_msg = format!("{e:#}");
             let _ = db
-                .set_repo_webhook_status(
-                    profile.id,
-                    "failed",
-                    Some(webhook_url),
-                    Some(&err_msg),
-                )
+                .set_repo_webhook_status(profile.id, "failed", Some(webhook_url), Some(&err_msg))
                 .await;
             Err(err_msg)
         }
@@ -202,7 +205,11 @@ pub async fn check_pending_onboards(config: &Config, db: &Database) -> Result<()
     }
 
     for profile in pending {
-        if !db.try_claim_repo_for_onboarding(profile.id).await.unwrap_or(false) {
+        if !db
+            .try_claim_repo_for_onboarding(profile.id)
+            .await
+            .unwrap_or(false)
+        {
             // Another pod is onboarding this repo; move on.
             continue;
         }
@@ -211,7 +218,9 @@ pub async fn check_pending_onboards(config: &Config, db: &Database) -> Result<()
             Ok(()) => info!(repo = %profile.repo, "Repo onboarded successfully"),
             Err(e) => {
                 error!(repo = %profile.repo, error = %e, "Failed to onboard repo");
-                let _ = db.set_repo_profile_error(profile.id, &format!("{e:#}")).await;
+                let _ = db
+                    .set_repo_profile_error(profile.id, &format!("{e:#}"))
+                    .await;
             }
         }
     }
@@ -224,9 +233,9 @@ pub async fn check_stale_profiles(config: &Config, db: &Database) -> Result<()> 
     let profiles = db.get_ready_repo_profiles().await?;
 
     for profile in profiles {
-        let repo_path = config.repos_dir.join(
-            profile.repo.rsplit('/').next().unwrap_or(&profile.repo),
-        );
+        let repo_path = config
+            .repos_dir
+            .join(profile.repo.rsplit('/').next().unwrap_or(&profile.repo));
         if !repo_path.exists() {
             continue;
         }
@@ -257,7 +266,10 @@ pub fn format_profiles_for_prompt(profiles: &[RepoProfile]) -> String {
 
         // Add structured info line if available
         if let Some(json) = &profile.profile_json {
-            let lang = json.get("language").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let lang = json
+                .get("language")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             let framework = json.get("framework").and_then(|v| v.as_str());
             let mut info_parts = vec![format!("Language: {lang}")];
             if let Some(fw) = framework {
@@ -280,12 +292,10 @@ pub fn format_profiles_for_prompt(profiles: &[RepoProfile]) -> String {
 
 /// Parse the structured JSON profile from CLI output.
 fn parse_profile_json(output: &str) -> serde_json::Value {
-    let json_str = output
-        .find("<!-- profile")
-        .and_then(|start| {
-            let after = &output[start..];
-            after.find("profile -->").map(|end| &after[12..end])
-        });
+    let json_str = output.find("<!-- profile").and_then(|start| {
+        let after = &output[start..];
+        after.find("profile -->").map(|end| &after[12..end])
+    });
 
     match json_str {
         Some(s) => {

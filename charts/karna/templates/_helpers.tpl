@@ -199,6 +199,68 @@ when chart-managed ingress is enabled.
 {{- end }}
 
 {{/*
+Memory URL injected into config.yaml. Prefers explicit config.memory.url.
+When mem0 is enabled and url is omitted, defaults to the in-cluster mem0 service.
+*/}}
+{{- define "karna.memoryUrl" -}}
+{{- if .Values.config.memory.url -}}
+{{- .Values.config.memory.url -}}
+{{- else if .Values.mem0.enabled -}}
+{{- printf "http://%s-mem0:8000" (include "karna.fullname" .) -}}
+{{- else -}}
+{{- "http://localhost:8888" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Secret name for mem0 provider API key (llm/embedder).
+Precedence:
+1) mem0.existingSecret + mem0.existingSecretApiKeyKey
+2) inline mem0.apiKey
+3) mem0 OpenRouter override (existingSecret or inline)
+4) global openrouter settings
+5) legacy mem0.openaiApiKey inline
+*/}}
+{{- define "karna.mem0ApiKeySecretName" -}}
+{{- if .Values.mem0.existingSecret -}}
+{{- .Values.mem0.existingSecret -}}
+{{- else if .Values.mem0.apiKey -}}
+{{- include "karna.secretName" . -}}
+{{- else if .Values.mem0.openrouterExistingSecret -}}
+{{- .Values.mem0.openrouterExistingSecret -}}
+{{- else if .Values.mem0.openrouterApiKey -}}
+{{- include "karna.secretName" . -}}
+{{- else if .Values.openrouter.existingSecret -}}
+{{- .Values.openrouter.existingSecret -}}
+{{- else if .Values.mem0.openaiApiKey -}}
+{{- include "karna.secretName" . -}}
+{{- else -}}
+{{- include "karna.secretName" . -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Secret key for mem0 provider API key (llm/embedder).
+*/}}
+{{- define "karna.mem0ApiKeySecretKey" -}}
+{{- if .Values.mem0.existingSecret -}}
+{{- .Values.mem0.existingSecretApiKeyKey | default "api-key" -}}
+{{- else if .Values.mem0.apiKey -}}
+{{- "mem0-api-key" -}}
+{{- else if .Values.mem0.openrouterExistingSecret -}}
+{{- .Values.mem0.openrouterExistingSecretApiKeyKey | default "openrouter-api-key" -}}
+{{- else if .Values.mem0.openrouterApiKey -}}
+{{- "mem0-openrouter-api-key" -}}
+{{- else if .Values.openrouter.existingSecret -}}
+{{- .Values.openrouter.existingSecretApiKeyKey | default "openrouter-api-key" -}}
+{{- else if .Values.mem0.openaiApiKey -}}
+{{- "mem0-openai-api-key" -}}
+{{- else -}}
+{{- "openrouter-api-key" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Name of the secret holding the PostgreSQL password.
 Returns the Bitnami-generated secret name or the user-provided existingSecret.
 */}}

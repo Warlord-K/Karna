@@ -74,6 +74,131 @@ impl TaskPriority {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskKind {
+    #[default]
+    Code,
+    Doc,
+    Research,
+    Ops,
+}
+
+impl TaskKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Code => "code",
+            Self::Doc => "doc",
+            Self::Research => "research",
+            Self::Ops => "ops",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ParseTaskKindError;
+
+impl std::str::FromStr for TaskKind {
+    type Err = ParseTaskKindError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "code" => Ok(Self::Code),
+            "doc" => Ok(Self::Doc),
+            "research" => Ok(Self::Research),
+            "ops" => Ok(Self::Ops),
+            _ => Err(ParseTaskKindError),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskOutputTarget {
+    Pr,
+    LinearComment,
+    LinearDoc,
+    SlackMessage,
+    Notification,
+    #[default]
+    None,
+}
+
+impl TaskOutputTarget {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pr => "pr",
+            Self::LinearComment => "linear_comment",
+            Self::LinearDoc => "linear_doc",
+            Self::SlackMessage => "slack_message",
+            Self::Notification => "notification",
+            Self::None => "none",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ParseTaskOutputTargetError;
+
+impl std::str::FromStr for TaskOutputTarget {
+    type Err = ParseTaskOutputTargetError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pr" => Ok(Self::Pr),
+            "linear_comment" => Ok(Self::LinearComment),
+            "linear_doc" => Ok(Self::LinearDoc),
+            "slack_message" => Ok(Self::SlackMessage),
+            "notification" => Ok(Self::Notification),
+            "none" => Ok(Self::None),
+            _ => Err(ParseTaskOutputTargetError),
+        }
+    }
+}
+
+fn default_orchestrator_max_turns() -> u32 {
+    12
+}
+
+fn default_orchestrator_max_actions_per_turn() -> usize {
+    10
+}
+
+fn default_orchestrator_max_subtasks() -> usize {
+    5
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OrchestratorConfig {
+    /// MCP tools the orchestrator may request with `run` actions.
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    #[serde(default = "default_orchestrator_max_turns")]
+    pub max_turns: u32,
+    /// Absolute RFC3339 timestamp OR relative duration (e.g. "2h").
+    #[serde(default)]
+    pub deadline: Option<String>,
+    #[serde(default = "default_orchestrator_max_actions_per_turn")]
+    pub max_actions_per_turn: usize,
+    #[serde(default = "default_orchestrator_max_subtasks")]
+    pub max_subtasks: usize,
+    #[serde(default)]
+    pub accepts_external_replies: bool,
+}
+
+impl Default for OrchestratorConfig {
+    fn default() -> Self {
+        Self {
+            allowed_tools: Vec::new(),
+            max_turns: default_orchestrator_max_turns(),
+            deadline: None,
+            max_actions_per_turn: default_orchestrator_max_actions_per_turn(),
+            max_subtasks: default_orchestrator_max_subtasks(),
+            accepts_external_replies: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct AgentTask {
@@ -84,6 +209,14 @@ pub struct AgentTask {
     pub title: String,
     pub description: Option<String>,
     pub repo: Option<String>,
+    /// Task intent: code changes vs non-code workflows.
+    pub kind: String,
+    /// Where a non-code artifact should be delivered.
+    pub output_target: Option<String>,
+    /// URL/id/thread-ts of the final artifact destination.
+    pub output_ref: Option<String>,
+    /// Task origin surface (e.g. "chat"); NULL keeps default board semantics.
+    pub source: Option<String>,
     pub parent_task_id: Option<Uuid>,
     pub target_branch: Option<String>,
     pub status: String,
@@ -94,6 +227,8 @@ pub struct AgentTask {
     pub pr_number: Option<i32>,
     pub plan_content: Option<String>,
     pub feedback: Option<String>,
+    /// Gating timestamp for deferred orchestrator turns.
+    pub not_before: Option<DateTime<Utc>>,
     pub agent_session_id: Option<String>,
     pub error_message: Option<String>,
     pub cli: Option<String>,
@@ -104,9 +239,23 @@ pub struct AgentTask {
     pub external_source: Option<String>,
     pub external_id: Option<String>,
     pub external_url: Option<String>,
+    /// Slack thread mapping for control-plane interactions.
+    /// When present, task updates are posted into this channel/thread.
+    pub slack_channel: Option<String>,
+    pub slack_thread_ts: Option<String>,
     /// NULL = any active agent profile may pick it up.
     /// Set = only the named agent profile picks it up.
     pub assigned_agent_id: Option<Uuid>,
+    /// Per-stage agent profile overrides for the multi-agent flow. NULL falls
+    /// back to `assigned_agent_id`, then the config default (see
+    /// `agent::resolve_runtime`). Let a task run scope/implement/review on
+    /// different tools/models (e.g. planner=cursor, implementer=codex,
+    /// reviewer=grok).
+    pub planner_agent_id: Option<Uuid>,
+    pub implementer_agent_id: Option<Uuid>,
+    pub reviewer_agent_id: Option<Uuid>,
+    /// Optional controls for task-level orchestration loops.
+    pub orchestrator: Option<serde_json::Value>,
     /// Policies that fired against this task's plan. Shape:
     /// `[{policy_id, name, severity, message, paths: [...]}]`.
     pub policy_matches: Option<serde_json::Value>,
@@ -123,6 +272,24 @@ impl AgentTask {
 
     pub fn target_branch_or_default(&self) -> &str {
         self.target_branch.as_deref().unwrap_or("main")
+    }
+
+    pub fn kind_enum(&self) -> TaskKind {
+        self.kind.parse::<TaskKind>().unwrap_or_default()
+    }
+
+    pub fn output_target_enum(&self) -> TaskOutputTarget {
+        self.output_target
+            .as_deref()
+            .unwrap_or(TaskOutputTarget::None.as_str())
+            .parse::<TaskOutputTarget>()
+            .unwrap_or_default()
+    }
+
+    pub fn orchestrator_config(&self) -> Option<OrchestratorConfig> {
+        self.orchestrator
+            .clone()
+            .and_then(|raw| serde_json::from_value::<OrchestratorConfig>(raw).ok())
     }
 
     pub fn agent_branch_name(&self) -> String {
@@ -377,4 +544,55 @@ pub struct PrReviewFinding {
     pub skip_reason: Option<String>,
     pub severity: String,
     pub created_at: Option<DateTime<Utc>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TaskKind, TaskOutputTarget};
+
+    #[test]
+    fn parses_task_kind_values() {
+        assert_eq!("code".parse::<TaskKind>().unwrap().as_str(), "code");
+        assert_eq!("doc".parse::<TaskKind>().unwrap().as_str(), "doc");
+        assert_eq!("research".parse::<TaskKind>().unwrap().as_str(), "research");
+        assert_eq!("ops".parse::<TaskKind>().unwrap().as_str(), "ops");
+    }
+
+    #[test]
+    fn rejects_invalid_task_kind_values() {
+        assert!("invalid".parse::<TaskKind>().is_err());
+    }
+
+    #[test]
+    fn parses_output_target_values() {
+        assert_eq!("pr".parse::<TaskOutputTarget>().unwrap().as_str(), "pr");
+        assert_eq!(
+            "linear_comment"
+                .parse::<TaskOutputTarget>()
+                .unwrap()
+                .as_str(),
+            "linear_comment"
+        );
+        assert_eq!(
+            "linear_doc".parse::<TaskOutputTarget>().unwrap().as_str(),
+            "linear_doc"
+        );
+        assert_eq!(
+            "slack_message"
+                .parse::<TaskOutputTarget>()
+                .unwrap()
+                .as_str(),
+            "slack_message"
+        );
+        assert_eq!(
+            "notification".parse::<TaskOutputTarget>().unwrap().as_str(),
+            "notification"
+        );
+        assert_eq!("none".parse::<TaskOutputTarget>().unwrap().as_str(), "none");
+    }
+
+    #[test]
+    fn rejects_invalid_output_target_values() {
+        assert!("email".parse::<TaskOutputTarget>().is_err());
+    }
 }

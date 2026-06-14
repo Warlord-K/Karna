@@ -14,9 +14,7 @@ use karna_shared::{
 
 use crate::AppState;
 
-pub async fn list(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<AgentProfile>>, StatusCode> {
+pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<AgentProfile>>, StatusCode> {
     let db = state.db.clone();
     let profiles = cache::get_or_set(
         &state.redis,

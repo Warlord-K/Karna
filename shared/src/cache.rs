@@ -85,8 +85,7 @@ pub async fn invalidate_pattern(redis: &redis::Client, pattern: &str) {
             Err(_) => return,
         };
         if !keys.is_empty() {
-            let _: Result<(), _> =
-                redis::cmd("DEL").arg(&keys).query_async(&mut conn).await;
+            let _: Result<(), _> = redis::cmd("DEL").arg(&keys).query_async(&mut conn).await;
         }
         cursor = next;
         if cursor == 0 {

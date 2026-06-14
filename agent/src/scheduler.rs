@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono::Utc;
 use cron::Schedule as CronSchedule;
 use std::str::FromStr;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::agent::planner::{append_skills_to_prompt, discover_all_extensions};
@@ -60,11 +60,7 @@ pub async fn sync_config_schedules(config: &Config, db: &Database) -> Result<()>
 
 /// Check all schedules and execute any that are due or manually triggered.
 /// Called from the main poll loop every iteration.
-pub async fn check_schedules(
-    config: &Config,
-    db: &Database,
-    redis: &redis::Client,
-) -> Result<()> {
+pub async fn check_schedules(config: &Config, db: &Database, redis: &redis::Client) -> Result<()> {
     let schedules = db.get_all_schedules().await?;
     if schedules.is_empty() {
         return Ok(());
@@ -82,10 +78,13 @@ pub async fn check_schedules(
 
         // Check if schedule might need to run (trigger or cron-due)
         let trigger_key = format!("schedule_trigger:{}", schedule.id);
-        let maybe_triggered = queue::key_exists(redis, &trigger_key).await.unwrap_or(false);
+        let maybe_triggered = queue::key_exists(redis, &trigger_key)
+            .await
+            .unwrap_or(false);
 
         // Disabled schedules can only run via manual trigger
-        if !maybe_triggered && (!schedule.enabled || !is_schedule_due(&schedule, last_run.as_ref())) {
+        if !maybe_triggered && (!schedule.enabled || !is_schedule_due(&schedule, last_run.as_ref()))
+        {
             continue;
         }
 
@@ -96,7 +95,9 @@ pub async fn check_schedules(
         }
 
         // Now safe to consume the trigger (we hold the lock)
-        let triggered = queue::key_exists(redis, &trigger_key).await.unwrap_or(false);
+        let triggered = queue::key_exists(redis, &trigger_key)
+            .await
+            .unwrap_or(false);
         if triggered {
             queue::delete_key(redis, &trigger_key).await?;
             info!(schedule = %schedule.name, "Manual trigger consumed");
@@ -150,8 +151,7 @@ pub async fn check_schedules(
 fn is_schedule_due(schedule: &Schedule, last_run: Option<&ScheduledRun>) -> bool {
     // One-shot: due if run_at is in the past and no completed run exists
     if let Some(run_at) = schedule.run_at {
-        return run_at <= Utc::now()
-            && last_run.is_none_or(|r| r.status != "completed");
+        return run_at <= Utc::now() && last_run.is_none_or(|r| r.status != "completed");
     }
 
     // Cron: due if next occurrence after last run is in the past
@@ -178,15 +178,15 @@ fn is_schedule_due(schedule: &Schedule, last_run: Option<&ScheduledRun>) -> bool
 }
 
 /// Execute a single schedule: create run, invoke CLI, parse output, create tasks.
-async fn execute_schedule(
-    config: &Config,
-    db: &Database,
-    schedule: &Schedule,
-) -> Result<()> {
+async fn execute_schedule(config: &Config, db: &Database, schedule: &Schedule) -> Result<()> {
     // Create run record
     let run = db.create_run(schedule.id).await?;
-    db.insert_run_log(run.id, "info", &format!("Starting schedule: {}", schedule.name))
-        .await?;
+    db.insert_run_log(
+        run.id,
+        "info",
+        &format!("Starting schedule: {}", schedule.name),
+    )
+    .await?;
 
     match execute_schedule_inner(config, db, schedule, &run).await {
         Ok(()) => Ok(()),
@@ -250,7 +250,11 @@ async fn execute_schedule_inner(
         repos_to_use.join(", ")
     };
 
-    let next_number = db.max_prefix_number(schedule.user_id, prefix).await.unwrap_or(0) + 1;
+    let next_number = db
+        .max_prefix_number(schedule.user_id, prefix)
+        .await
+        .unwrap_or(0)
+        + 1;
 
     let mut prompt = include_str!("../templates/schedule_prompt.txt").to_string();
     prompt = prompt.replace("{name}", &schedule.name);
@@ -323,7 +327,8 @@ async fn execute_schedule_inner(
 
         let schedule_repos = schedule.repos();
         for (i, task_def) in tasks_to_create.iter().take(remaining_slots).enumerate() {
-            let corrected_title = normalize_prefix_title(&task_def.title, prefix, next_number + i as i32);
+            let corrected_title =
+                normalize_prefix_title(&task_def.title, prefix, next_number + i as i32);
 
             // Resolve repo: the schedule's configured repos take precedence over
             // whatever the LLM emitted. This prevents tasks from leaking onto
@@ -338,7 +343,8 @@ async fn execute_schedule_inner(
                     }
                 }
                 _ => {
-                    if !task_def.repo.is_empty() && schedule_repos.contains(&task_def.repo.as_str()) {
+                    if !task_def.repo.is_empty() && schedule_repos.contains(&task_def.repo.as_str())
+                    {
                         Some(task_def.repo.clone())
                     } else {
                         None
@@ -441,12 +447,10 @@ struct TaskDirective {
 
 /// Parse task definitions from CLI output using the same HTML comment pattern as subtasks.
 fn parse_tasks_from_output(output: &str) -> Vec<TaskDirective> {
-    let re_match = output
-        .find("<!-- tasks")
-        .and_then(|start| {
-            let after = &output[start..];
-            after.find("tasks -->").map(|end| &after[10..end])
-        });
+    let re_match = output.find("<!-- tasks").and_then(|start| {
+        let after = &output[start..];
+        after.find("tasks -->").map(|end| &after[10..end])
+    });
 
     let json_str = match re_match {
         Some(s) => s.trim(),

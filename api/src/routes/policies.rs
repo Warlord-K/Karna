@@ -11,9 +11,7 @@ use karna_shared::{cache, models::Policy};
 
 use crate::AppState;
 
-pub async fn list(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<Policy>>, StatusCode> {
+pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Policy>>, StatusCode> {
     let db = state.db.clone();
     let rows = cache::get_or_set(
         &state.redis,
@@ -50,7 +48,11 @@ pub async fn create(
         return Err(StatusCode::BAD_REQUEST);
     }
     let repo_pattern = body.repo_pattern.as_deref().unwrap_or("*").trim();
-    let repo_pattern = if repo_pattern.is_empty() { "*" } else { repo_pattern };
+    let repo_pattern = if repo_pattern.is_empty() {
+        "*"
+    } else {
+        repo_pattern
+    };
 
     let row = state
         .db

@@ -48,17 +48,29 @@ pub async fn github_webhook(
     // (Vercel preview deploys, GitHub Actions, dependabot, renovate, Karna's
     // own progress-comment edits). Mirrors the agent's webhook filter.
     if event == "issue_comment" || event == "pull_request_review_comment" {
-        let kind = payload.pointer("/comment/user/type").and_then(|v| v.as_str()).unwrap_or("");
+        let kind = payload
+            .pointer("/comment/user/type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if kind == "Bot" {
-            let login = payload.pointer("/comment/user/login").and_then(|v| v.as_str()).unwrap_or("");
+            let login = payload
+                .pointer("/comment/user/login")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             info!(event, bot = login, "Webhook: ignoring bot comment");
             return StatusCode::OK;
         }
     }
     if event == "pull_request_review" {
-        let kind = payload.pointer("/review/user/type").and_then(|v| v.as_str()).unwrap_or("");
+        let kind = payload
+            .pointer("/review/user/type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if kind == "Bot" {
-            let login = payload.pointer("/review/user/login").and_then(|v| v.as_str()).unwrap_or("");
+            let login = payload
+                .pointer("/review/user/login")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             info!(event, bot = login, "Webhook: ignoring bot review");
             return StatusCode::OK;
         }
@@ -69,9 +81,11 @@ pub async fn github_webhook(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let is_agent_branch = branch.contains('/') && branch.split('/').next().is_some_and(|p| {
-        p.rfind('-').is_some_and(|i| p[i + 1..].chars().all(|c| c.is_ascii_digit()) && i > 0)
-    });
+    let is_agent_branch = branch.contains('/')
+        && branch.split('/').next().is_some_and(|p| {
+            p.rfind('-')
+                .is_some_and(|i| p[i + 1..].chars().all(|c| c.is_ascii_digit()) && i > 0)
+        });
     if !is_agent_branch {
         // Human-opened PR → enqueue an auto-review if the repo opted in.
         if event == "pull_request" && matches!(action, "opened" | "reopened" | "synchronize") {
@@ -100,7 +114,10 @@ pub async fn github_webhook(
             == Some(true)
     {
         info!(task_id = %task.id, branch, "Webhook: PR merged, marking done");
-        let _ = state.db.update_status(task.id, TaskStatus::Done.as_str()).await;
+        let _ = state
+            .db
+            .update_status(task.id, TaskStatus::Done.as_str())
+            .await;
         let _ = state
             .db
             .insert_log(task.id, "webhook", "PR merged, task complete", "info", None)
@@ -131,7 +148,13 @@ pub async fn github_webhook(
                     .await;
                 let _ = state
                     .db
-                    .insert_log(task.id, "webhook", &format!("PR review ({review_state}): feedback received"), "info", None)
+                    .insert_log(
+                        task.id,
+                        "webhook",
+                        &format!("PR review ({review_state}): feedback received"),
+                        "info",
+                        None,
+                    )
                     .await;
             }
             return StatusCode::OK;
@@ -165,7 +188,13 @@ pub async fn github_webhook(
             let _ = state.db.set_feedback(task.id, &combined).await;
             let _ = state
                 .db
-                .insert_log(task.id, "webhook", "PR comment added to feedback", "info", None)
+                .insert_log(
+                    task.id,
+                    "webhook",
+                    "PR comment added to feedback",
+                    "info",
+                    None,
+                )
                 .await;
         }
     }
@@ -178,10 +207,7 @@ pub async fn github_webhook(
 /// Decoupling the webhook from execution means cloud deploys (where the api
 /// receives webhooks via ALB) and local docker-compose (where the agent's own
 /// port is exposed) behave identically.
-async fn handle_pr_review_trigger(
-    state: &AppState,
-    payload: &serde_json::Value,
-) -> StatusCode {
+async fn handle_pr_review_trigger(state: &AppState, payload: &serde_json::Value) -> StatusCode {
     if payload
         .pointer("/pull_request/draft")
         .and_then(|v| v.as_bool())
@@ -191,18 +217,27 @@ async fn handle_pr_review_trigger(
         return StatusCode::OK;
     }
 
-    let repo = match payload.pointer("/repository/full_name").and_then(|v| v.as_str()) {
+    let repo = match payload
+        .pointer("/repository/full_name")
+        .and_then(|v| v.as_str())
+    {
         Some(r) => r.to_string(),
         None => return StatusCode::OK,
     };
-    let pr_number = match payload.pointer("/pull_request/number").and_then(|v| v.as_i64()) {
+    let pr_number = match payload
+        .pointer("/pull_request/number")
+        .and_then(|v| v.as_i64())
+    {
         Some(n) => n as i32,
         None => return StatusCode::OK,
     };
     let pr_url = payload
         .pointer("/pull_request/html_url")
         .and_then(|v| v.as_str());
-    let head_sha = match payload.pointer("/pull_request/head/sha").and_then(|v| v.as_str()) {
+    let head_sha = match payload
+        .pointer("/pull_request/head/sha")
+        .and_then(|v| v.as_str())
+    {
         Some(s) => s,
         None => return StatusCode::OK,
     };
@@ -260,7 +295,10 @@ async fn handle_pr_review_trigger(
 }
 
 async fn handle_issue_opened(state: &AppState, payload: &serde_json::Value) -> StatusCode {
-    let repo_name = match payload.pointer("/repository/full_name").and_then(|v| v.as_str()) {
+    let repo_name = match payload
+        .pointer("/repository/full_name")
+        .and_then(|v| v.as_str())
+    {
         Some(r) => r,
         None => return StatusCode::OK,
     };
@@ -274,15 +312,34 @@ async fn handle_issue_opened(state: &AppState, payload: &serde_json::Value) -> S
         return StatusCode::OK;
     }
 
-    let issue_number = payload.pointer("/issue/number").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-    let issue_title = payload.pointer("/issue/title").and_then(|v| v.as_str()).unwrap_or("Untitled");
-    let issue_body = payload.pointer("/issue/body").and_then(|v| v.as_str()).unwrap_or("");
-    let issue_url = payload.pointer("/issue/html_url").and_then(|v| v.as_str()).unwrap_or("");
+    let issue_number = payload
+        .pointer("/issue/number")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+    let issue_title = payload
+        .pointer("/issue/title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Untitled");
+    let issue_body = payload
+        .pointer("/issue/body")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let issue_url = payload
+        .pointer("/issue/html_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     // Deduplicate: check if a task already exists for this issue
-    match state.db.find_task_by_github_issue(repo_name, issue_number).await {
+    match state
+        .db
+        .find_task_by_github_issue(repo_name, issue_number)
+        .await
+    {
         Ok(Some(_)) => {
-            info!(repo = repo_name, issue_number, "Task already exists for issue, skipping");
+            info!(
+                repo = repo_name,
+                issue_number, "Task already exists for issue, skipping"
+            );
             return StatusCode::OK;
         }
         Err(e) => {
@@ -301,17 +358,42 @@ async fn handle_issue_opened(state: &AppState, payload: &serde_json::Value) -> S
     };
 
     let title = format!("GH-{}: {}", issue_number, issue_title);
-    let body_truncated = if issue_body.len() > 10_000 { &issue_body[..10_000] } else { issue_body };
+    let body_truncated = if issue_body.len() > 10_000 {
+        &issue_body[..10_000]
+    } else {
+        issue_body
+    };
     let description = if issue_url.is_empty() {
         body_truncated.to_string()
     } else {
         format!("{}\n\n---\n_Opened from: {}_", body_truncated, issue_url)
     };
 
-    match state.db.create_task(user_id, &title, Some(&description), Some(repo_name), "medium", None, None).await {
+    match state
+        .db
+        .create_task(
+            user_id,
+            &title,
+            Some(&description),
+            Some(repo_name),
+            "medium",
+            None,
+            None,
+        )
+        .await
+    {
         Ok(task) => {
             info!(task_id = %task.id, repo = repo_name, issue_number, "Created task from GitHub issue");
-            let _ = state.db.insert_log(task.id, "webhook", &format!("Task created from GitHub issue #{issue_number}"), "info", None).await;
+            let _ = state
+                .db
+                .insert_log(
+                    task.id,
+                    "webhook",
+                    &format!("Task created from GitHub issue #{issue_number}"),
+                    "info",
+                    None,
+                )
+                .await;
             StatusCode::OK
         }
         Err(e) => {
@@ -400,7 +482,9 @@ pub async fn linear_webhook(
     body: String,
 ) -> StatusCode {
     let secret = std::env::var("LINEAR_WEBHOOK_SECRET").ok();
-    let signature = headers.get("linear-signature").and_then(|v| v.to_str().ok());
+    let signature = headers
+        .get("linear-signature")
+        .and_then(|v| v.to_str().ok());
     if !verify_raw_hmac(secret.as_deref(), signature, body.as_bytes()) {
         warn!("Linear webhook signature verification failed");
         return StatusCode::UNAUTHORIZED;
@@ -457,7 +541,11 @@ pub async fn linear_webhook(
         .create_task_full(
             user_id,
             &title,
-            if description.is_empty() { None } else { Some(description) },
+            if description.is_empty() {
+                None
+            } else {
+                Some(description)
+            },
             None, // repo — let the agent figure it out
             priority,
             None,
@@ -467,6 +555,13 @@ pub async fn linear_webhook(
             Some("linear"),
             Some(external_id),
             if url.is_empty() { None } else { Some(url) },
+            None, // planner_agent_id — default
+            None, // implementer_agent_id — default
+            None, // reviewer_agent_id — default
+            None, // kind — default code
+            None, // output_target — default none
+            None, // orchestrator — none
+            None, // source — board/default surface
         )
         .await
     {
@@ -617,6 +712,13 @@ pub async fn clickup_webhook(
             Some("clickup"),
             Some(task_id),
             Some(&external_url),
+            None, // planner_agent_id — default
+            None, // implementer_agent_id — default
+            None, // reviewer_agent_id — default
+            None, // kind — default code
+            None, // output_target — default none
+            None, // orchestrator — none
+            None, // source — board/default surface
         )
         .await
     {
@@ -648,7 +750,8 @@ async fn fetch_clickup_task(task_id: &str) -> anyhow::Result<Option<serde_json::
         return Ok(None);
     };
 
-    let url = format!("https://api.clickup.com/api/v2/task/{task_id}?include_markdown_description=true");
+    let url =
+        format!("https://api.clickup.com/api/v2/task/{task_id}?include_markdown_description=true");
     let resp = reqwest::Client::new()
         .get(&url)
         .header("Authorization", api_token)

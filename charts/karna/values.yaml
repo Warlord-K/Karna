@@ -281,11 +281,34 @@ claude:
   existingSecret: ""
   existingSecretTokenKey: oauth-token
 
+# -- Slack
+slack:
+  botToken: ""
+  appToken: ""
+  existingSecret: ""
+  existingSecretBotTokenKey: slack-bot-token
+  existingSecretAppTokenKey: slack-app-token
+
 # -- opencode / OpenRouter (required when the `opencode` backend is enabled)
 openrouter:
   apiKey: ""
   existingSecret: ""
   existingSecretApiKeyKey: openrouter-api-key
+
+# -- MCP server secrets used by config.mcpServers[*].env placeholders (e.g. ${LINEAR_API_KEY})
+mcpSecrets:
+  # Inline key/value pairs templated into the chart-managed Secret.
+  # Example:
+  # inline:
+  #   LINEAR_API_KEY: "lin_..."
+  #   SENTRY_AUTH_TOKEN: "sntrys_..."
+  inline: {}
+  # Existing Kubernetes Secrets to bulk-load into the agent as env vars.
+  # Each Secret key becomes an env var name.
+  # Example:
+  # existingSecrets:
+  #   - my-mcp-tokens
+  existingSecrets: []
 
 # -- Agent configuration (rendered as config.yaml)
 config:
@@ -295,7 +318,22 @@ config:
   #    sync_issues: true
   maxTurns: 100
   pollIntervalSecs: 30
+  maxReviewRounds: 3
   maxConcurrentTasks: 1
+  memory:
+    enabled: false
+    # Leave empty to auto-resolve:
+    # - mem0 service URL when mem0.enabled=true
+    # - http://localhost:8888 otherwise
+    url: ""
+    maxItems: 8
+    maxChars: 2000
+  slack:
+    enabled: false
+    defaultChannel: ""
+    dmUserIds: []
+    allowedUserIds: []
+    userMap: {}
   backends:
     claude:
       models: [opus, sonnet, haiku]
@@ -313,8 +351,97 @@ config:
         - openrouter/qwen/qwen3-coder
       default_model: openrouter/moonshotai/kimi-k2.6
   mcpServers: []
+  #  - name: linear
+  #    command: npx
+  #    args: ["-y", "@linear/mcp-server"]
+  #    env:
+  #      LINEAR_API_KEY: "${LINEAR_API_KEY}"
+  #  - name: sentry
+  #    command: npx
+  #    args: ["-y", "@sentry/mcp-server"]
+  #    env:
+  #      SENTRY_AUTH_TOKEN: "${SENTRY_AUTH_TOKEN}"
+  #  - name: generic-token-server
+  #    command: npx
+  #    args: ["-y", "@example/mcp-server"]
+  #    env:
+  #      EXAMPLE_MCP_TOKEN: "${EXAMPLE_MCP_TOKEN}"
+  #
+  # Pair the placeholders above with mcpSecrets (or your own existing secrets):
+  # mcpSecrets:
+  #   inline:
+  #     LINEAR_API_KEY: "lin_..."
+  #     SENTRY_AUTH_TOKEN: "sntrys_..."
+  #     EXAMPLE_MCP_TOKEN: "token_..."
+  #   existingSecrets:
+  #     - my-mcp-tokens
   instructions: ""
   existingConfigMap: ""
+
+# -- Optional in-cluster mem0 stack
+mem0:
+  enabled: false
+  # Shared API key used for both llm/embedder unless provider-specific keys are
+  # supplied elsewhere. Useful when pointing mem0 at OpenAI directly.
+  apiKey: ""
+  existingSecret: ""
+  existingSecretApiKeyKey: api-key
+  # OpenRouter-specific override for mem0. If unset, mem0 falls back to the
+  # global openrouter.* values used by the agent's opencode backend.
+  openrouterApiKey: ""
+  openrouterExistingSecret: ""
+  openrouterExistingSecretApiKeyKey: openrouter-api-key
+  # Legacy field kept for backwards compatibility with older values files.
+  openaiApiKey: ""
+  llm:
+    provider: openai
+    model: openai/gpt-4o-mini
+    baseUrl: https://openrouter.ai/api/v1
+  embedder:
+    provider: openai
+    # text-embedding-3-small is 1536 dims by default in mem0/openai.
+    model: openai/text-embedding-3-small
+    baseUrl: https://openrouter.ai/api/v1
+  jwtSecret: mem0-local-dev-secret
+  authDisabled: true
+  telemetry: false
+  api:
+    image:
+      repository: mem0/mem0-api-server
+      tag: latest
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+  postgres:
+    image:
+      repository: ankane/pgvector
+      tag: v0.5.1
+      pullPolicy: IfNotPresent
+    auth:
+      username: postgres
+      password: postgres
+      database: mem0_app
+    persistence:
+      enabled: true
+      storageClass: ""
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+  history:
+    persistence:
+      enabled: false
+      storageClass: ""
+      size: 2Gi
 
 # -- Git identity for agent commits
 git:

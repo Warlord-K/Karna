@@ -84,6 +84,29 @@ spec:
                   name: {{ .Values.openrouter.existingSecret | default (include "karna.secretName" .) }}
                   key: {{ .Values.openrouter.existingSecretApiKeyKey | default "openrouter-api-key" }}
                   optional: true
+            {{- $mcpInline := .Values.mcpSecrets.inline | default dict }}
+            {{- range $envName := keys $mcpInline | sortAlpha }}
+            - name: {{ $envName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "karna.secretName" $ }}
+                  key: {{ $envName }}
+                  optional: true
+            {{- end }}
+            {{- if .Values.config.slack.enabled }}
+            - name: SLACK_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.slack.existingSecret | default (include "karna.secretName" .) }}
+                  key: {{ .Values.slack.existingSecretBotTokenKey | default "slack-bot-token" }}
+                  optional: true
+            - name: SLACK_APP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.slack.existingSecret | default (include "karna.secretName" .) }}
+                  key: {{ .Values.slack.existingSecretAppTokenKey | default "slack-app-token" }}
+                  optional: true
+            {{- end }}
             {{- if .Values.github.webhookSecret }}
             - name: GITHUB_WEBHOOK_SECRET
               valueFrom:
@@ -109,9 +132,15 @@ spec:
             {{- with .Values.agent.extraEnv }}
             {{- tpl (toYaml .) $ | nindent 12 }}
             {{- end }}
-          {{- with .Values.agent.extraEnvFrom }}
+          {{- if or .Values.mcpSecrets.existingSecrets .Values.agent.extraEnvFrom }}
           envFrom:
+            {{- range .Values.mcpSecrets.existingSecrets }}
+            - secretRef:
+                name: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.agent.extraEnvFrom }}
             {{- tpl (toYaml .) $ | nindent 12 }}
+            {{- end }}
           {{- end }}
           volumeMounts:
             - name: config

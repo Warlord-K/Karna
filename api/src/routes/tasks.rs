@@ -1,13 +1,20 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
+    response::IntoResponse,
     Extension, Json,
 };
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::{convert::Infallible, time::Duration};
+use tracing::warn;
 use uuid::Uuid;
 
 use karna_shared::cache;
+use karna_shared::db::LogCursor;
+use karna_shared::models::{OrchestratorConfig, TaskKind, TaskOutputTarget};
 
 use crate::auth::UserId;
 use crate::AppState;
@@ -22,16 +29,37 @@ pub struct CreateTask {
     priority: Option<String>,
     cli: Option<String>,
     model: Option<String>,
+    /// Task kind. Defaults to `code` when omitted.
+    kind: Option<String>,
+    /// Artifact delivery target for non-code flows. Defaults to `none`.
+    output_target: Option<String>,
     /// User UUID. NULL = pick up by agent (existing behavior).
     assignee_user_id: Option<Uuid>,
     /// Agent profile UUID. NULL = any agent picks it up.
     /// Mutually exclusive with assignee_user_id at the frontend, but the DB
     /// accepts either independently so callers can model intent precisely.
     assigned_agent_id: Option<Uuid>,
+    /// Per-stage agent profile overrides for the multi-agent flow. Each is an
+    /// agent profile UUID; NULL falls back to assigned_agent_id then default.
+    planner_agent_id: Option<Uuid>,
+    implementer_agent_id: Option<Uuid>,
+    reviewer_agent_id: Option<Uuid>,
     /// "linear" | "clickup" — only set when ingesting from an external system.
     external_source: Option<String>,
     external_id: Option<String>,
     external_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct CreateOrchestratorTask {
+    title: String,
+    description: Option<String>,
+    repo: Option<String>,
+    priority: Option<String>,
+    source: Option<String>,
+    slack_channel: Option<String>,
+    thread_ts: Option<String>,
+    orchestrator: Option<OrchestratorConfig>,
 }
 
 pub async fn list(
@@ -40,12 +68,27 @@ pub async fn list(
 ) -> Result<Json<Vec<karna_shared::models::AgentTask>>, StatusCode> {
     let key = cache::tasks_list_key(user.0);
     let db = state.db.clone();
-    let tasks = cache::get_or_set(&state.redis, &key, cache::DEFAULT_TTL_SECS, move || async move {
-        db.list_tasks_for_user(user.0).await
-    })
+    let tasks = cache::get_or_set(
+        &state.redis,
+        &key,
+        cache::DEFAULT_TTL_SECS,
+        move || async move { db.list_tasks_for_user(user.0).await },
+    )
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(tasks))
+}
+
+pub async fn list_chats(
+    State(state): State<AppState>,
+    Extension(user): Extension<UserId>,
+) -> Result<Json<Vec<karna_shared::models::AgentTask>>, StatusCode> {
+    let chats = state
+        .db
+        .list_chats_for_user(user.0)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(chats))
 }
 
 pub async fn create(
@@ -57,6 +100,18 @@ pub async fn create(
     if title.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
+    let kind = body
+        .kind
+        .as_deref()
+        .unwrap_or(TaskKind::Code.as_str())
+        .parse::<TaskKind>()
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let output_target = body
+        .output_target
+        .as_deref()
+        .unwrap_or(TaskOutputTarget::None.as_str())
+        .parse::<TaskOutputTarget>()
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let task = state
         .db
@@ -73,9 +128,107 @@ pub async fn create(
             body.external_source.as_deref(),
             body.external_id.as_deref(),
             body.external_url.as_deref(),
+            body.planner_agent_id,
+            body.implementer_agent_id,
+            body.reviewer_agent_id,
+            Some(kind.as_str()),
+            Some(output_target.as_str()),
+            None,
+            None,
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok((StatusCode::CREATED, Json(task)))
+}
+
+pub async fn create_orchestrator_task(
+    State(state): State<AppState>,
+    Extension(user): Extension<UserId>,
+    Json(body): Json<CreateOrchestratorTask>,
+) -> Result<(StatusCode, Json<karna_shared::models::AgentTask>), StatusCode> {
+    let title = body.title.trim();
+    if title.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if body.thread_ts.is_some() && body.slack_channel.is_none() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let source = match body.source.as_deref() {
+        None => None,
+        Some("chat") => Some("chat"),
+        Some(_) => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    let mut orchestrator_cfg = body.orchestrator.unwrap_or_default();
+    if source == Some("chat") {
+        if orchestrator_cfg.allowed_tools.is_empty() {
+            orchestrator_cfg.allowed_tools = state
+                .config
+                .mcp_servers
+                .iter()
+                .map(|server| server.name.clone())
+                .collect();
+        }
+        orchestrator_cfg.accepts_external_replies = false;
+    }
+    let orchestrator_json =
+        serde_json::to_value(orchestrator_cfg).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let task = state
+        .db
+        .create_task_full(
+            user.0,
+            title,
+            body.description.as_deref(),
+            body.repo.as_deref(),
+            body.priority.as_deref().unwrap_or("medium"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(TaskKind::Ops.as_str()),
+            Some(TaskOutputTarget::None.as_str()),
+            Some(&orchestrator_json),
+            source,
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut updates = std::collections::HashMap::new();
+    if let Some(channel) = body.slack_channel.as_deref() {
+        updates.insert(
+            "slack_channel".to_string(),
+            Value::String(channel.to_string()),
+        );
+        if let Some(thread_ts) = body.thread_ts.as_deref() {
+            updates.insert(
+                "slack_thread_ts".to_string(),
+                Value::String(thread_ts.to_string()),
+            );
+        }
+    }
+    if !updates.is_empty() {
+        let _ = state
+            .db
+            .update_task(task.id, user.0, &updates)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    let task = state
+        .db
+        .get_task(task.id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok((StatusCode::CREATED, Json(task)))
 }
@@ -122,19 +275,119 @@ pub async fn logs(
     Extension(user): Extension<UserId>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<karna_shared::models::AgentLog>>, StatusCode> {
-    if !state.db.task_belongs_to_user(id, user.0).await.unwrap_or(false) {
+    if !state
+        .db
+        .task_belongs_to_user(id, user.0)
+        .await
+        .unwrap_or(false)
+    {
         return Err(StatusCode::NOT_FOUND);
     }
 
     let key = cache::tasks_logs_key(id);
     let db = state.db.clone();
-    let logs = cache::get_or_set(&state.redis, &key, cache::DEFAULT_TTL_SECS, move || async move {
-        db.get_logs(id, 200).await
-    })
+    let logs = cache::get_or_set(
+        &state.redis,
+        &key,
+        cache::DEFAULT_TTL_SECS,
+        move || async move { db.get_logs(id, 200).await },
+    )
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(logs))
+}
+
+#[derive(Deserialize)]
+pub struct LogsStreamQuery {
+    /// Optional cursor in the form "<rfc3339>|<uuid>".
+    after: Option<String>,
+}
+
+pub async fn logs_stream(
+    State(state): State<AppState>,
+    Extension(user): Extension<UserId>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<LogsStreamQuery>,
+) -> Result<impl IntoResponse, StatusCode> {
+    if !state
+        .db
+        .task_belongs_to_user(id, user.0)
+        .await
+        .unwrap_or(false)
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let mut cursor = match query.after {
+        Some(raw) => Some(parse_log_cursor(&raw).map_err(|_| StatusCode::BAD_REQUEST)?),
+        None => None,
+    };
+    let db = state.db.clone();
+
+    let stream = async_stream::stream! {
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            tick.tick().await;
+            match db.get_logs_since(id, cursor.clone(), 200).await {
+                Ok(logs) => {
+                    for log in logs {
+                        if let Some(created_at) = log.created_at {
+                            cursor = Some(LogCursor {
+                                created_at,
+                                id: log.id,
+                            });
+                        }
+
+                        match serde_json::to_string(&log) {
+                            Ok(payload) => {
+                                yield Ok::<Event, Infallible>(
+                                    Event::default()
+                                        .event("log")
+                                        .id(log.id.to_string())
+                                        .data(payload),
+                                );
+                            }
+                            Err(error) => {
+                                warn!(task_id = %id, %error, "failed to serialize task log for SSE");
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    warn!(task_id = %id, %error, "failed to poll task logs for SSE");
+                }
+            }
+        }
+    };
+
+    let sse = Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    );
+    Ok((
+        [("cache-control", "no-cache"), ("x-accel-buffering", "no")],
+        sse,
+    ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CursorParseError {
+    Format,
+    Timestamp,
+    Uuid,
+}
+
+fn parse_log_cursor(raw: &str) -> Result<LogCursor, CursorParseError> {
+    let (created_at_raw, id_raw) = raw.split_once('|').ok_or(CursorParseError::Format)?;
+    let created_at = DateTime::parse_from_rfc3339(created_at_raw)
+        .map_err(|_| CursorParseError::Timestamp)?
+        .with_timezone(&Utc);
+    let id = Uuid::parse_str(id_raw).map_err(|_| CursorParseError::Uuid)?;
+    Ok(LogCursor { created_at, id })
 }
 
 #[derive(Deserialize)]
@@ -156,10 +409,7 @@ pub async fn post_comment(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let default_id = Uuid::parse_str(DEFAULT_USER_ID).unwrap();
-    if !state.db.is_shared_workspace()
-        && task.user_id != user.0
-        && task.user_id != default_id
-    {
+    if !state.db.is_shared_workspace() && task.user_id != user.0 && task.user_id != default_id {
         return Err(StatusCode::NOT_FOUND);
     }
 
@@ -195,7 +445,12 @@ pub async fn list_subtasks(
     Extension(user): Extension<UserId>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<karna_shared::models::AgentTask>>, StatusCode> {
-    if !state.db.task_belongs_to_user(id, user.0).await.unwrap_or(false) {
+    if !state
+        .db
+        .task_belongs_to_user(id, user.0)
+        .await
+        .unwrap_or(false)
+    {
         return Err(StatusCode::NOT_FOUND);
     }
 
@@ -222,10 +477,7 @@ pub async fn create_subtasks(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let default_id = Uuid::parse_str(DEFAULT_USER_ID).unwrap();
-    if !state.db.is_shared_workspace()
-        && task.user_id != user.0
-        && task.user_id != default_id
-    {
+    if !state.db.is_shared_workspace() && task.user_id != user.0 && task.user_id != default_id {
         return Err(StatusCode::NOT_FOUND);
     }
 
@@ -233,7 +485,10 @@ pub async fn create_subtasks(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let plan = task.plan_content.as_deref().ok_or(StatusCode::BAD_REQUEST)?;
+    let plan = task
+        .plan_content
+        .as_deref()
+        .ok_or(StatusCode::BAD_REQUEST)?;
 
     // Parse <!-- subtasks [...] subtasks --> block
     let re = regex_lite::Regex::new(r"<!--\s*subtasks\s*\n([\s\S]*?)\nsubtasks\s*-->").unwrap();
@@ -265,10 +520,11 @@ pub async fn create_subtasks(
                 task.user_id,
                 &def.title,
                 def.description.as_deref(),
-                &def.repo,
+                Some(&def.repo),
                 &task.priority,
                 task.cli.as_deref(),
                 task.model.as_deref(),
+                None,
             )
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -291,4 +547,43 @@ struct SubtaskDef {
     title: String,
     repo: String,
     description: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_log_cursor, CursorParseError};
+    use chrono::{TimeZone, Utc};
+    use uuid::Uuid;
+
+    #[test]
+    fn parses_valid_log_cursor() {
+        let id = Uuid::new_v4();
+        let cursor = format!("2026-06-14T16:30:00Z|{id}");
+        let parsed = parse_log_cursor(&cursor).expect("cursor should parse");
+        assert_eq!(
+            parsed.created_at,
+            Utc.with_ymd_and_hms(2026, 6, 14, 16, 30, 0).unwrap()
+        );
+        assert_eq!(parsed.id, id);
+    }
+
+    #[test]
+    fn rejects_missing_delimiter() {
+        let err = parse_log_cursor("2026-06-14T16:30:00Z").expect_err("cursor should be rejected");
+        assert_eq!(err, CursorParseError::Format);
+    }
+
+    #[test]
+    fn rejects_invalid_timestamp() {
+        let err = parse_log_cursor("not-a-time|00000000-0000-0000-0000-000000000000")
+            .expect_err("cursor should be rejected");
+        assert_eq!(err, CursorParseError::Timestamp);
+    }
+
+    #[test]
+    fn rejects_invalid_uuid() {
+        let err = parse_log_cursor("2026-06-14T16:30:00Z|not-a-uuid")
+            .expect_err("cursor should be rejected");
+        assert_eq!(err, CursorParseError::Uuid);
+    }
 }

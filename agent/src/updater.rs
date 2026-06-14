@@ -20,7 +20,6 @@ impl SelfRepoChange {
     pub fn needs_rebuild(&self) -> bool {
         self.agent_code || self.frontend_code || self.infrastructure
     }
-
 }
 
 /// Check if the self-repo has updates on its remote branch.
@@ -123,13 +122,9 @@ fn classify_file(path: &str) -> FileCategory {
         || path == "agent/Dockerfile"
     {
         FileCategory::AgentCode
-    } else if path.starts_with("frontend/")
-        || path == "frontend/Dockerfile"
-    {
+    } else if path.starts_with("frontend/") || path == "frontend/Dockerfile" {
         FileCategory::FrontendCode
-    } else if path == "docker-compose.yml"
-        || path.starts_with("migrations/")
-    {
+    } else if path == "docker-compose.yml" || path.starts_with("migrations/") {
         FileCategory::Infrastructure
     } else {
         // skills/, *.md, config*.yaml, instructions, etc.

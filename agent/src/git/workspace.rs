@@ -27,13 +27,20 @@ pub async fn configure_git_auth(github_token: &str) -> Result<()> {
 
     // Tell git to use the credential store
     let _ = Command::new("git")
-        .args(["config", "--global", "credential.helper", &format!("store --file={}", cred_path.display())])
+        .args([
+            "config",
+            "--global",
+            "credential.helper",
+            &format!("store --file={}", cred_path.display()),
+        ])
         .current_dir(git_dir)
         .output()
         .await;
 
-    let author_name = std::env::var("GIT_AUTHOR_NAME").unwrap_or_else(|_| "Karna Agent".to_string());
-    let author_email = std::env::var("GIT_AUTHOR_EMAIL").unwrap_or_else(|_| "agent@karna.dev".to_string());
+    let author_name =
+        std::env::var("GIT_AUTHOR_NAME").unwrap_or_else(|_| "Karna Agent".to_string());
+    let author_email =
+        std::env::var("GIT_AUTHOR_EMAIL").unwrap_or_else(|_| "agent@karna.dev".to_string());
 
     let _ = Command::new("git")
         .args(["config", "--global", "user.name", &author_name])
@@ -71,9 +78,9 @@ pub async fn configure_git_signing(signing: Option<&crate::config::SigningConfig
 
     // Copy key to a writable location so we can fix permissions (mount may be :ro)
     let local_key = PathBuf::from("/home/agent/.ssh/signing_key_active");
-    tokio::fs::copy(key_path, &local_key).await.with_context(|| {
-        format!("Failed to copy signing key from {}", key_path.display())
-    })?;
+    tokio::fs::copy(key_path, &local_key)
+        .await
+        .with_context(|| format!("Failed to copy signing key from {}", key_path.display()))?;
 
     #[cfg(unix)]
     {
@@ -107,7 +114,8 @@ pub async fn configure_git_signing(signing: Option<&crate::config::SigningConfig
         if signers_path.exists() {
             let _ = Command::new("git")
                 .args([
-                    "config", "--global",
+                    "config",
+                    "--global",
                     "gpg.ssh.allowedSignersFile",
                     &signers_path.to_string_lossy(),
                 ])
@@ -121,7 +129,11 @@ pub async fn configure_git_signing(signing: Option<&crate::config::SigningConfig
 }
 
 /// Ensure a repo is cloned in the repos directory. Returns the clone path.
-pub async fn ensure_cloned(repos_dir: &Path, repo_url: &str, _github_token: &str) -> Result<PathBuf> {
+pub async fn ensure_cloned(
+    repos_dir: &Path,
+    repo_url: &str,
+    _github_token: &str,
+) -> Result<PathBuf> {
     let repo_name = repo_url
         .rsplit('/')
         .next()
@@ -170,7 +182,8 @@ pub async fn create_worktree(
 ) -> Result<()> {
     // If the worktree already exists, check if it's on the right branch
     if worktree_path.exists() {
-        let current_branch = run_git_output(worktree_path, &["rev-parse", "--abbrev-ref", "HEAD"]).await;
+        let current_branch =
+            run_git_output(worktree_path, &["rev-parse", "--abbrev-ref", "HEAD"]).await;
         if let Ok(branch) = current_branch {
             if branch.trim() == branch_name {
                 info!(
@@ -183,7 +196,16 @@ pub async fn create_worktree(
             }
         }
         // Wrong branch or broken worktree — clean up and recreate
-        let _ = run_git(repo_path, &["worktree", "remove", "--force", &worktree_path.to_string_lossy()]).await;
+        let _ = run_git(
+            repo_path,
+            &[
+                "worktree",
+                "remove",
+                "--force",
+                &worktree_path.to_string_lossy(),
+            ],
+        )
+        .await;
         let _ = tokio::fs::remove_dir_all(worktree_path).await;
     }
 
@@ -221,7 +243,12 @@ pub async fn create_worktree(
 pub async fn remove_worktree(repo_path: &Path, worktree_path: &Path) -> Result<()> {
     let _ = run_git(
         repo_path,
-        &["worktree", "remove", "--force", &worktree_path.to_string_lossy()],
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            &worktree_path.to_string_lossy(),
+        ],
     )
     .await;
     Ok(())
@@ -245,6 +272,18 @@ pub async fn commit_all(worktree_path: &Path, message: &str) -> Result<bool> {
 pub async fn push(worktree_path: &Path, branch: &str) -> Result<()> {
     run_git(worktree_path, &["push", "-u", "origin", branch]).await?;
     Ok(())
+}
+
+/// Full diff of the branch (committed + uncommitted) against its base branch.
+///
+/// Stages all changes first so newly created files are included, then diffs the
+/// working tree against `origin/<base_branch>`. This is the diff a self-review
+/// stage inspects before Karna commits and opens the PR.
+pub async fn working_tree_diff(worktree_path: &Path, base_branch: &str) -> Result<String> {
+    // Stage everything (incl. untracked) so it shows up in the diff.
+    run_git(worktree_path, &["add", "-A"]).await?;
+    let base_ref = format!("origin/{base_branch}");
+    run_git_output(worktree_path, &["diff", &base_ref]).await
 }
 
 /// Check if the current branch has any commits ahead of its merge-base with the given base branch.
@@ -324,7 +363,12 @@ pub async fn commit_log_oneline(worktree_path: &Path, base_branch: &str) -> Resu
     let base_ref = format!("origin/{base_branch}");
     let output = run_git_output(
         worktree_path,
-        &["log", "--oneline", "--format=%s", &format!("{base_ref}..HEAD")],
+        &[
+            "log",
+            "--oneline",
+            "--format=%s",
+            &format!("{base_ref}..HEAD"),
+        ],
     )
     .await?;
     Ok(output

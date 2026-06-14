@@ -224,7 +224,11 @@ async fn process_review_row(config: &Config, db: &Database, review: &PrReview) -
     };
 
     let (cli_name, model, addendum) = match agent_profile.as_ref() {
-        Some(p) => (p.cli.clone(), p.model.clone(), p.system_prompt_addendum.clone()),
+        Some(p) => (
+            p.cli.clone(),
+            p.model.clone(),
+            p.system_prompt_addendum.clone(),
+        ),
         None => {
             let cli = config.default_cli().to_string();
             let model = config.default_model(&cli).to_string();
@@ -244,37 +248,47 @@ async fn process_review_row(config: &Config, db: &Database, review: &PrReview) -
          <sub>This comment will be updated when the review finishes. Sourced from <code>{head_sha}</code>.</sub>",
         head_sha = &review.head_sha[..review.head_sha.len().min(8)],
     );
-    let progress_comment_id = match post_pr_comment(&review.repo, review.pr_number, &progress_body).await {
-        Ok(id) => {
-            let _ = db.insert_pr_review_log(
-                review.id,
-                "review",
-                &format!("Posted progress comment #{id} on {}#{}", review.repo, review.pr_number),
-                "info",
-                None,
-            ).await;
-            Some(id)
-        }
-        Err(e) => {
-            warn!(error = %e, "Failed to post review-in-progress comment");
-            let _ = db.insert_pr_review_log(
-                review.id,
-                "review",
-                &format!("Failed to post progress comment: {e}"),
-                "warning",
-                None,
-            ).await;
-            None
-        }
-    };
+    let progress_comment_id =
+        match post_pr_comment(&review.repo, review.pr_number, &progress_body).await {
+            Ok(id) => {
+                let _ = db
+                    .insert_pr_review_log(
+                        review.id,
+                        "review",
+                        &format!(
+                            "Posted progress comment #{id} on {}#{}",
+                            review.repo, review.pr_number
+                        ),
+                        "info",
+                        None,
+                    )
+                    .await;
+                Some(id)
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to post review-in-progress comment");
+                let _ = db
+                    .insert_pr_review_log(
+                        review.id,
+                        "review",
+                        &format!("Failed to post progress comment: {e}"),
+                        "warning",
+                        None,
+                    )
+                    .await;
+                None
+            }
+        };
 
-    let _ = db.insert_pr_review_log(
-        review.id,
-        "review",
-        &format!("Invoking {cli_name} ({model}) for read-only review"),
-        "command",
-        None,
-    ).await;
+    let _ = db
+        .insert_pr_review_log(
+            review.id,
+            "review",
+            &format!("Invoking {cli_name} ({model}) for read-only review"),
+            "command",
+            None,
+        )
+        .await;
 
     let outcome = run_review(config, db, review, &cli_name, &model, addendum.as_deref()).await;
 
@@ -314,7 +328,13 @@ async fn process_review_row(config: &Config, db: &Database, review: &PrReview) -
     }
 
     if let Err(e) = db
-        .complete_pr_review(review.id, status, comments_posted, cost_usd, error.as_deref())
+        .complete_pr_review(
+            review.id,
+            status,
+            comments_posted,
+            cost_usd,
+            error.as_deref(),
+        )
         .await
     {
         warn!(error = %e, "Failed to record pr_review completion");
@@ -341,9 +361,10 @@ async fn run_review(
     model: &str,
     addendum: Option<&str>,
 ) -> Result<ReviewOutcome> {
-    let clone_path = workspace::ensure_cloned(&config.repos_dir, &review.repo, &config.github_token)
-        .await
-        .context("Failed to ensure repo is cloned for review")?;
+    let clone_path =
+        workspace::ensure_cloned(&config.repos_dir, &review.repo, &config.github_token)
+            .await
+            .context("Failed to ensure repo is cloned for review")?;
 
     let system_prompt = match (config.instructions.as_deref(), addendum) {
         (Some(g), Some(a)) => format!("{REVIEWER_SYSTEM_PROMPT}\n\n{g}\n\n{a}"),
@@ -434,13 +455,15 @@ async fn run_review(
         Ok(diff_text) => DiffIndex::parse(&diff_text),
         Err(e) => {
             warn!(error = %e, "Could not fetch PR diff for anchor validation");
-            let _ = db.insert_pr_review_log(
-                review.id,
-                "review",
-                &format!("Could not fetch PR diff: {e}. Posting body only."),
-                "warning",
-                None,
-            ).await;
+            let _ = db
+                .insert_pr_review_log(
+                    review.id,
+                    "review",
+                    &format!("Could not fetch PR diff: {e}. Posting body only."),
+                    "warning",
+                    None,
+                )
+                .await;
             DiffIndex::empty()
         }
     };
@@ -489,16 +512,18 @@ async fn run_review(
     }
 
     if !skipped.is_empty() {
-        let _ = db.insert_pr_review_log(
-            review.id,
-            "review",
-            &format!(
-                "Skipped {} finding(s) whose anchors are not in the PR diff",
-                skipped.len()
-            ),
-            "warning",
-            None,
-        ).await;
+        let _ = db
+            .insert_pr_review_log(
+                review.id,
+                "review",
+                &format!(
+                    "Skipped {} finding(s) whose anchors are not in the PR diff",
+                    skipped.len()
+                ),
+                "warning",
+                None,
+            )
+            .await;
     }
 
     // Compose the review body. Append a footer noting any skipped findings so
@@ -537,25 +562,29 @@ async fn run_review(
     .await
     {
         Ok(n) => {
-            let _ = db.insert_pr_review_log(
-                review.id,
-                "review",
-                &format!("Posted review with {n} inline comment(s)"),
-                "info",
-                None,
-            ).await;
+            let _ = db
+                .insert_pr_review_log(
+                    review.id,
+                    "review",
+                    &format!("Posted review with {n} inline comment(s)"),
+                    "info",
+                    None,
+                )
+                .await;
             n
         }
         Err(e) => {
             // Last-resort fallback: post the body alone, no inline comments.
             warn!(error = %e, "Structured review POST failed — falling back to body-only");
-            let _ = db.insert_pr_review_log(
-                review.id,
-                "review",
-                &format!("Structured review POST failed: {e}. Falling back to body-only."),
-                "warning",
-                None,
-            ).await;
+            let _ = db
+                .insert_pr_review_log(
+                    review.id,
+                    "review",
+                    &format!("Structured review POST failed: {e}. Falling back to body-only."),
+                    "warning",
+                    None,
+                )
+                .await;
             post_structured_review(&review.repo, review.pr_number, &body, &[])
                 .await
                 .context("Body-only fallback review also failed")?;
@@ -592,7 +621,10 @@ fn spawn_review_log_consumer(db: Database, review_id: Uuid) -> EventSender {
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
             let (message, log_type) = match event {
-                StreamEvent::ToolUse { tool, input_summary } => {
+                StreamEvent::ToolUse {
+                    tool,
+                    input_summary,
+                } => {
                     let msg = if input_summary.is_empty() {
                         tool
                     } else {
@@ -702,7 +734,9 @@ struct DiffIndex {
 
 impl DiffIndex {
     fn empty() -> Self {
-        Self { anchors: HashMap::new() }
+        Self {
+            anchors: HashMap::new(),
+        }
     }
 
     fn parse(diff: &str) -> Self {
@@ -813,10 +847,17 @@ fn validate_findings(
             skipped.push((c.clone(), "empty body or path".into()));
             continue;
         }
-        let side_char = if c.side.eq_ignore_ascii_case("LEFT") { 'L' } else { 'R' };
+        let side_char = if c.side.eq_ignore_ascii_case("LEFT") {
+            'L'
+        } else {
+            'R'
+        };
         if let Some(start) = c.start_line {
             if start > c.line {
-                skipped.push((c.clone(), format!("start_line ({start}) > line ({})", c.line)));
+                skipped.push((
+                    c.clone(),
+                    format!("start_line ({start}) > line ({})", c.line),
+                ));
                 continue;
             }
             if !diff.allows(&c.path, start, side_char) {
@@ -903,7 +944,11 @@ async fn post_structured_review(
 }
 
 fn comment_payload(c: &FindingComment) -> Value {
-    let side = if c.side.eq_ignore_ascii_case("LEFT") { "LEFT" } else { "RIGHT" };
+    let side = if c.side.eq_ignore_ascii_case("LEFT") {
+        "LEFT"
+    } else {
+        "RIGHT"
+    };
     let sev = normalize_severity(&c.severity);
     // Prepend the severity marker so the inline comment on GitHub itself
     // shows the tier — without it, reviewers would only see the badge in the
@@ -950,7 +995,10 @@ async fn post_pr_comment(repo: &str, pr_number: i32, body: &str) -> Result<i64> 
         stdin.write_all(payload.as_bytes()).await.ok();
         stdin.shutdown().await.ok();
     }
-    let done = child.wait_with_output().await.context("gh api wait failed")?;
+    let done = child
+        .wait_with_output()
+        .await
+        .context("gh api wait failed")?;
     if !done.status.success() {
         let stderr = String::from_utf8_lossy(&done.stderr);
         anyhow::bail!("gh api comment POST failed: {stderr}");
@@ -987,7 +1035,10 @@ async fn update_pr_comment(repo: &str, comment_id: i64, body: &str) -> Result<()
         stdin.write_all(payload.as_bytes()).await.ok();
         stdin.shutdown().await.ok();
     }
-    let done = child.wait_with_output().await.context("gh api wait failed")?;
+    let done = child
+        .wait_with_output()
+        .await
+        .context("gh api wait failed")?;
     if !done.status.success() {
         let stderr = String::from_utf8_lossy(&done.stderr);
         anyhow::bail!("gh api comment PATCH failed: {stderr}");

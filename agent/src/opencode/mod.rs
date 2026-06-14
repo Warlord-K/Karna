@@ -71,7 +71,9 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
         // MCP servers are picked up from ~/.config/opencode/opencode.json,
         // written at agent startup by config::write_opencode_global_config().
         // The per-task `mcp_config_json` (Claude format) isn't used here.
-        debug!("opencode backend reads MCP servers from opencode.json, not per-task mcp_config_json");
+        debug!(
+            "opencode backend reads MCP servers from opencode.json, not per-task mcp_config_json"
+        );
     }
 
     // opencode takes the prompt as a positional argument.
@@ -163,8 +165,7 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
                         .or_else(|| json.get("arguments"))
                         .cloned()
                         .unwrap_or(serde_json::Value::Null);
-                    let summary =
-                        crate::cli::summarize_tool_input(tool, &input);
+                    let summary = crate::cli::summarize_tool_input(tool, &input);
                     let _ = tx.send(StreamEvent::ToolUse {
                         tool: tool.to_string(),
                         input_summary: summary,
