@@ -1,3 +1,5 @@
+import type { BadgeTone } from '@/components/ui/badge';
+
 // Types
 export type AgentTaskStatus = 'todo' | 'planning' | 'plan_review' | 'in_progress' | 'review' | 'done' | 'failed' | 'cancelled';
 export type AgentTaskPriority = 'low' | 'medium' | 'high' | 'urgent';
@@ -49,6 +51,8 @@ export interface AgentTask {
   pr_url: string | null;
   pr_number: number | null;
   plan_content: string | null;
+  /** Persisted artifact/result the agent produced (markdown). Surfaced in task detail. */
+  result_content?: string | null;
   feedback: string | null;
   not_before: string | null;
   agent_session_id: string | null;
@@ -130,6 +134,45 @@ export const COLUMN_CONFIG: Record<AgentColumn, { label: string; color: string; 
   done:        { label: 'Done',        color: '#6ab070', statuses: ['done', 'cancelled'] },
   failed:      { label: 'Failed',      color: '#d4583a', statuses: ['failed'] },
 };
+
+const TASK_STATUS_LABELS: Record<AgentTaskStatus, string> = {
+  todo: 'Todo',
+  planning: 'Planning',
+  plan_review: 'Plan Review',
+  in_progress: 'In Progress',
+  review: 'Review',
+  done: 'Done',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+};
+
+/** Map a task status to a semantic Badge tone:
+ *  done→success (green), failed→danger (red), plan_review→warning (amber),
+ *  review→info, active work (planning/in_progress)→accent (sun), else neutral. */
+export function taskStatusTone(status: AgentTaskStatus): BadgeTone {
+  switch (status) {
+    case 'done':
+      return 'success';
+    case 'failed':
+      return 'danger';
+    case 'plan_review':
+      return 'warning';
+    case 'review':
+      return 'info';
+    case 'planning':
+    case 'in_progress':
+      return 'accent';
+    case 'cancelled':
+    case 'todo':
+    default:
+      return 'neutral';
+  }
+}
+
+/** Human label + semantic tone for a task status, shared across board/detail/cards. */
+export function taskStatusBadge(status: AgentTaskStatus): { label: string; tone: BadgeTone } {
+  return { label: TASK_STATUS_LABELS[status] ?? status, tone: taskStatusTone(status) };
+}
 
 export const PRIORITY_ORDER: Record<AgentTaskPriority, number> = {
   urgent: 0, high: 1, medium: 2, low: 3,

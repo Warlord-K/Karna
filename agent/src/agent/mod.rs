@@ -5,10 +5,12 @@ pub(crate) mod planner;
 mod self_review;
 
 use anyhow::Result;
+use serde_json::{json, Value};
+use std::collections::{HashMap, VecDeque};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::cli::{EventSender, StreamEvent};
+use crate::cli::{truncate_for_log, EventSender, StreamEvent, TOOL_OUTPUT_MAX_CHARS};
 use crate::config::Config;
 use crate::db::Database;
 use crate::git::workspace;
@@ -115,18 +117,48 @@ pub fn merge_system_prompt(global: Option<&str>, addendum: Option<&str>) -> Opti
 pub fn spawn_log_consumer(db: Database, task_id: Uuid, phase: &'static str) -> EventSender {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
     tokio::spawn(async move {
+        let mut pending_inputs: HashMap<String, VecDeque<String>> = HashMap::new();
         while let Some(event) = rx.recv().await {
-            let (message, log_type) = match event {
+            let (message, log_type, metadata) = match event {
                 StreamEvent::ToolUse {
                     tool,
                     input_summary,
                 } => {
+                    let mut metadata = json!({ "tool": tool });
+                    if !input_summary.is_empty() {
+                        if let Some(obj) = metadata.as_object_mut() {
+                            obj.insert("input".to_string(), Value::String(input_summary.clone()));
+                        }
+                        pending_inputs
+                            .entry(tool.clone())
+                            .or_default()
+                            .push_back(input_summary.clone());
+                    }
                     let msg = if input_summary.is_empty() {
                         tool.clone()
                     } else {
                         format!("{tool}: {input_summary}")
                     };
-                    (msg, "tool")
+                    (msg, "tool", Some(metadata))
+                }
+                StreamEvent::ToolResult { tool, output } => {
+                    let output = truncate_for_log(output.trim(), TOOL_OUTPUT_MAX_CHARS);
+                    if output.is_empty() {
+                        continue;
+                    }
+                    let mut metadata = json!({
+                        "tool": tool,
+                        "output": output,
+                    });
+                    if let Some(input) = pending_inputs
+                        .get_mut(&tool)
+                        .and_then(|queue| queue.pop_front())
+                    {
+                        if let Some(obj) = metadata.as_object_mut() {
+                            obj.insert("input".to_string(), Value::String(input));
+                        }
+                    }
+                    (format!("{tool} output"), "tool", Some(metadata))
                 }
                 StreamEvent::AssistantText(text) => {
                     // Only log substantial text
@@ -135,12 +167,12 @@ pub fn spawn_log_consumer(db: Database, task_id: Uuid, phase: &'static str) -> E
                         continue;
                     }
                     let truncated: String = trimmed.chars().take(300).collect();
-                    (truncated, "output")
+                    (truncated, "output", None)
                 }
-                StreamEvent::Error(e) => (format!("Error: {e}"), "error"),
+                StreamEvent::Error(e) => (format!("Error: {e}"), "error", None),
             };
             let _ = db
-                .insert_log(task_id, phase, &message, log_type, None)
+                .insert_log(task_id, phase, &message, log_type, metadata)
                 .await;
         }
     });
@@ -444,6 +476,7 @@ mod tests {
             pr_url: None,
             pr_number: None,
             plan_content: None,
+            result_content: None,
             feedback: None,
             not_before: None,
             agent_session_id: None,

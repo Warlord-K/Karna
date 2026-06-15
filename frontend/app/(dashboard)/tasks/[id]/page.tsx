@@ -6,13 +6,13 @@ import {
   AgentTask,
   AgentLog,
   AgentTaskPriority,
-  AgentTaskStatus,
   UserSummary,
   buildLogStreamUrl,
   encodeLogCursor,
   hasSubtaskDefinitions,
   getTaskLabel,
   getTaskTitle,
+  taskStatusBadge,
   userDisplayName,
 } from '@/lib/agent-tasks';
 import {
@@ -29,18 +29,21 @@ import {
 } from '@/hooks/use-tasks';
 import {
   ArrowLeft, Trash, GitPullRequest, ArrowSquareOut, Check, X, Prohibit,
-  ChatText, Article, FileText, Lightning, WarningCircle, ArrowCounterClockwise,
-  Clock, Stack, Terminal, Robot, User, CaretDown,
+  Article, FileText, Lightning, WarningCircle, ArrowCounterClockwise,
+  Clock, Stack, Terminal, Robot, User, PaperPlaneTilt, CircleNotch, Sparkle,
 } from '@phosphor-icons/react';
 import toast from 'react-hot-toast';
 import { MarkdownEditor } from '@/components/agent/markdown-editor';
 import { MarkdownContent } from '@/components/agent/markdown-content';
+import { TaskThreadView } from '@/components/agent/task-thread-view';
 import { TaskAttachments } from '@/components/agent/task-attachments';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { formatDistanceToNow, format } from 'date-fns';
 import { useSession } from 'next-auth/react';
 import { useAuthDisabled } from '@/lib/auth-context';
 
-type Tab = 'details' | 'plan' | 'subtasks' | 'activity';
+type Tab = 'details' | 'plan' | 'result' | 'subtasks' | 'activity';
 
 export default function TaskDetailPage() {
   const params = useParams();
@@ -88,6 +91,14 @@ export default function TaskDetailPage() {
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
+
+  // Auto-grow the comment composer so the box hugs its content (matches chat).
+  useEffect(() => {
+    const node = commentRef.current;
+    if (!node) return;
+    node.style.height = '0px';
+    node.style.height = `${Math.min(node.scrollHeight, 200)}px`;
+  }, [comment, activeTab]);
 
   useEffect(() => {
     if (activeTab !== 'activity') {
@@ -250,10 +261,14 @@ export default function TaskDetailPage() {
   };
 
   const repoName = task.repo ? (task.repo.split('/').pop() || task.repo) : null;
+  // In review/plan_review a comment is feedback for the agent, so the send
+  // control becomes a labeled "Request changes" button instead of an icon.
+  const isFeedbackComposer = task.status === 'review' || task.status === 'plan_review';
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode; hidden?: boolean }[] = [
     { id: 'details', label: 'Details', icon: <FileText size={16} weight="bold" /> },
     { id: 'plan', label: 'Plan', icon: <Article size={16} weight="bold" /> },
+    { id: 'result', label: 'Result', icon: <Sparkle size={16} weight="bold" />, hidden: !task.result_content },
     { id: 'subtasks', label: `Subtasks${subtasks.length ? ` (${subtasks.length})` : ''}`, icon: <Stack size={16} weight="bold" />, hidden: subtasks.length === 0 && !hasSubtaskDefinitions(task) },
     { id: 'activity', label: 'Activity', icon: <Terminal size={16} weight="bold" /> },
   ];
@@ -290,7 +305,9 @@ export default function TaskDetailPage() {
               <option value="high">High</option>
               <option value="urgent">Urgent</option>
             </select>
-            <StatusBadge status={task.status} />
+            <Badge tone={taskStatusBadge(task.status).tone} className="flex-shrink-0">
+              {taskStatusBadge(task.status).label}
+            </Badge>
             {task.pr_url && (
               <a
                 href={task.pr_url}
@@ -506,6 +523,32 @@ export default function TaskDetailPage() {
           </div>
         )}
 
+        {activeTab === 'result' && (
+          <div className="space-y-4">
+            {task.result_content ? (
+              <div className="rounded-xl border border-gray-4 bg-gray-2 px-4 py-4">
+                {task.output_ref && /^https?:\/\//i.test(task.output_ref) && (
+                  <a
+                    href={task.output_ref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mb-3 inline-flex items-center gap-1.5 text-[13px] text-sun-10 transition-smooth focus-ring hover:text-sun-9"
+                  >
+                    <ArrowSquareOut size={14} weight="bold" />
+                    Open {task.output_target ? task.output_target.replace(/_/g, ' ') : 'output'}
+                  </a>
+                )}
+                <MarkdownContent content={task.result_content} />
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-20 text-gray-8">
+                <Sparkle size={32} weight="thin" className="mb-3" />
+                <p className="text-[14px]">No result yet</p>
+              </div>
+            )}
+          </div>
+        )}
+
         {activeTab === 'subtasks' && (
           <div className="space-y-px">
             {subtasks.length === 0 ? (
@@ -605,179 +648,56 @@ export default function TaskDetailPage() {
               </div>
             ) : (
               <div className="bg-gray-2 border border-gray-4 rounded-lg p-3 sm:p-4 mb-4">
-                <ThreadView logs={logs} />
+                <TaskThreadView logs={logs} />
                 <div ref={logsEndRef} />
               </div>
             )}
 
             <div className="mt-auto pt-3 border-t border-gray-3">
-              <div className="flex gap-2 items-end">
+              <div className="flex items-end gap-2 rounded-xl border border-gray-4 bg-gray-1 px-2.5 py-2 transition-smooth focus-within:border-gray-6 focus-within:ring-2 focus-within:ring-sun-9/25">
                 <textarea
                   ref={commentRef}
                   value={comment}
                   onChange={(e) => setComment(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && e.metaKey) handlePostComment(); }}
-                  rows={2}
-                  placeholder="Leave a comment..."
-                  className="flex-1 px-3 py-2 rounded-lg bg-gray-2 border border-gray-4 text-gray-11 text-[16px] sm:text-[13px] focus:outline-none focus:border-gray-6 placeholder:text-gray-7 resize-none"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handlePostComment();
+                    }
+                  }}
+                  rows={1}
+                  placeholder={isFeedbackComposer ? 'Request changes…' : 'Leave a comment…'}
+                  className="flex-1 max-h-[200px] resize-none bg-transparent py-1 text-[16px] leading-6 text-gray-12 placeholder:text-gray-7 focus:outline-none sm:text-[14px]"
                 />
-                <button
+                <Button
+                  type="button"
+                  variant="primary"
+                  size={isFeedbackComposer ? 'sm' : 'icon'}
                   onClick={handlePostComment}
                   disabled={loading || !comment.trim()}
-                  className="h-9 px-3.5 text-[13px] font-medium text-white bg-sun-9 hover:bg-sun-10 text-gray-1 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                  className="shrink-0"
+                  aria-label={isFeedbackComposer ? 'Request changes' : 'Send comment'}
                 >
-                  {task.status === 'review' ? 'Request Changes' : task.status === 'plan_review' ? 'Request Changes' : 'Comment'}
-                </button>
+                  {loading ? (
+                    <CircleNotch size={15} weight="bold" className="animate-spin" />
+                  ) : isFeedbackComposer ? (
+                    'Request changes'
+                  ) : (
+                    <PaperPlaneTilt size={15} weight="fill" />
+                  )}
+                </Button>
               </div>
-              {(task.status === 'review' || task.status === 'plan_review') && (
-                <p className="text-[11px] text-gray-7 mt-1.5">
-                  Commenting will send feedback to the agent. <span className="text-gray-8">\u2318 Enter</span> to submit.
-                </p>
-              )}
+              <p className="text-[11px] text-gray-7 mt-1.5">
+                {isFeedbackComposer
+                  ? 'Commenting will send feedback to the agent. '
+                  : ''}
+                <kbd className="font-sans text-gray-8">Enter</kbd> to send ·{' '}
+                <kbd className="font-sans text-gray-8">Shift+Enter</kbd> for newline
+              </p>
             </div>
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status: AgentTaskStatus }) {
-  const config: Record<AgentTaskStatus, { label: string; color: string }> = {
-    todo:         { label: 'Todo',        color: '#a09e97' },
-    planning:     { label: 'Planning',    color: '#e5b847' },
-    plan_review:  { label: 'Plan Review', color: '#e5b847' },
-    in_progress:  { label: 'In Progress', color: '#e5b847' },
-    review:       { label: 'Review',      color: '#60a5a0' },
-    done:         { label: 'Done',        color: '#6ab070' },
-    failed:       { label: 'Failed',      color: '#d4583a' },
-    cancelled:    { label: 'Cancelled',   color: '#82807a' },
-  };
-
-  const c = config[status];
-  return (
-    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-9">
-      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: c.color }} />
-      {c.label}
-    </span>
-  );
-}
-
-const phaseLabels: Record<string, string> = {
-  plan: 'Plan',
-  planning: 'Plan',
-  implement: 'Implement',
-  in_progress: 'Implement',
-  self_review: 'Self Review',
-  review: 'Review',
-  feedback: 'Feedback',
-  user: 'Feedback',
-};
-
-function phaseLabel(phase: string): string {
-  if (phaseLabels[phase]) return phaseLabels[phase];
-  return phase.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function looksLikeCodeOrDiff(message: string): boolean {
-  const trimmed = message.trim();
-  if (!trimmed) return false;
-  return (
-    trimmed.startsWith('diff --git')
-    || trimmed.startsWith('@@ ')
-    || trimmed.includes('\n@@ ')
-    || trimmed.startsWith('```')
-  );
-}
-
-function formatLogMessage(log: AgentLog): string {
-  const message = log.message?.trim() || '_No message_';
-  if (!looksLikeCodeOrDiff(message)) return message;
-  if (message.startsWith('```')) return message;
-  return `\`\`\`diff\n${message}\n\`\`\``;
-}
-
-function ThreadView({ logs }: { logs: AgentLog[] }) {
-  const sections = useMemo(() => {
-    const grouped: { phase: string; logs: AgentLog[] }[] = [];
-    for (const log of logs) {
-      const prev = grouped[grouped.length - 1];
-      if (prev && prev.phase === log.phase) {
-        prev.logs.push(log);
-      } else {
-        grouped.push({ phase: log.phase, logs: [log] });
-      }
-    }
-    return grouped;
-  }, [logs]);
-
-  return (
-    <div className="space-y-4">
-      {sections.map((section, idx) => (
-        <div key={`${section.phase}-${idx}`} className="space-y-2">
-          <div className="text-[11px] uppercase tracking-wider text-gray-7 font-medium">
-            {phaseLabel(section.phase)}
-          </div>
-          <div className="space-y-2">
-            {section.logs.map((log) => (
-              <ThreadMessage key={log.id} log={log} />
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ThreadMessage({ log }: { log: AgentLog }) {
-  const time = format(new Date(log.created_at), 'HH:mm:ss');
-
-  if (log.log_type === 'comment') {
-    return (
-      <div className="ml-auto max-w-[90%] rounded-lg bg-sun-3 border border-sun-5 px-3 py-2">
-        <div className="flex items-center gap-2 mb-1">
-          <ChatText size={13} weight="bold" className="text-sun-9 flex-shrink-0" />
-          <span className="text-[11px] text-sun-9 font-medium">You</span>
-          <span className="text-[11px] text-gray-7 ml-auto">{time}</span>
-        </div>
-        <p className="text-[13px] text-gray-12 whitespace-pre-wrap break-words font-sans">{log.message}</p>
-      </div>
-    );
-  }
-
-  if (log.log_type === 'tool') {
-    return (
-      <details className="rounded-lg border border-gray-4 bg-gray-3/60 px-3 py-2">
-        <summary className="list-none cursor-pointer flex items-center gap-2 text-[12px] text-sun-9">
-          <CaretDown size={13} weight="bold" className="text-sun-9" />
-          <span className="font-medium">Tool Call</span>
-          <span className="text-gray-8 truncate">{log.message}</span>
-          <span className="text-[11px] text-gray-7 ml-auto">{time}</span>
-        </summary>
-        <div className="mt-2 pt-2 border-t border-gray-4">
-          <p className="text-[12px] text-gray-10 break-all whitespace-pre-wrap font-mono">{log.message}</p>
-          {log.metadata && (
-            <pre className="mt-2 p-2 rounded bg-gray-2 border border-gray-4 text-[11px] text-gray-9 overflow-x-auto">
-              {JSON.stringify(log.metadata, null, 2)}
-            </pre>
-          )}
-        </div>
-      </details>
-    );
-  }
-
-  const isError = log.log_type === 'error';
-  return (
-    <div className={`rounded-lg border px-3 py-2 ${
-      isError ? 'border-red-500/30 bg-red-500/10' : 'border-gray-4 bg-gray-3/40'
-    }`}>
-      <div className="flex items-center gap-2 mb-1">
-        <span className={`text-[11px] font-medium ${isError ? 'text-red-300' : 'text-gray-8'}`}>
-          {isError ? 'Error' : 'Assistant'}
-        </span>
-        <span className="text-[11px] text-gray-7 ml-auto">{time}</span>
-      </div>
-      <MarkdownContent content={formatLogMessage(log)} className="text-[13px]" />
     </div>
   );
 }
@@ -793,16 +713,11 @@ const subtaskColors: Record<string, string> = {
   cancelled:   '#82807a',
 };
 
-const subtaskLabels: Record<string, string> = {
-  todo: 'Todo', planning: 'Planning', plan_review: 'Plan Review',
-  in_progress: 'Working', review: 'Review', done: 'Done', failed: 'Failed',
-  cancelled: 'Cancelled',
-};
-
 function SubtaskRow({ task }: { task: AgentTask }) {
   const router = useRouter();
   const color = subtaskColors[task.status] || '#b4b4bf';
   const repoName = task.repo ? (task.repo.split('/').pop() || task.repo) : '\u2014';
+  const badge = taskStatusBadge(task.status);
 
   return (
     <div
@@ -821,7 +736,7 @@ function SubtaskRow({ task }: { task: AgentTask }) {
       </div>
       <div className="flex items-center gap-2 sm:gap-3 ml-[18px] sm:ml-0 flex-shrink-0">
         <span className="text-xs text-gray-8 font-mono">{repoName}</span>
-        <span className="text-xs" style={{ color }}>{subtaskLabels[task.status]}</span>
+        <Badge tone={badge.tone}>{badge.label}</Badge>
         {task.pr_url && (
           <a href={task.pr_url} target="_blank" rel="noopener noreferrer"
             className="text-xs text-gray-8 hover:text-gray-12 flex items-center gap-1 transition-colors"

@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use karna_shared::cache;
 use karna_shared::db::LogCursor;
-use karna_shared::models::{OrchestratorConfig, TaskKind, TaskOutputTarget};
+use karna_shared::models::{AgentTask, OrchestratorConfig, TaskKind, TaskOutputTarget};
 
 use crate::auth::UserId;
 use crate::AppState;
@@ -559,6 +559,16 @@ pub async fn create_subtasks(
             )
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let _ = state
+            .db
+            .insert_log(
+                task.id,
+                "plan",
+                &format!("Created subtask: {} ({})", sub.title, sub.id),
+                "info",
+                Some(task_card_metadata(&sub)),
+            )
+            .await;
         created.push(sub);
     }
 
@@ -578,6 +588,21 @@ struct SubtaskDef {
     title: String,
     repo: String,
     description: Option<String>,
+}
+
+fn task_card_metadata(task: &AgentTask) -> Value {
+    let mut metadata = serde_json::Map::new();
+    metadata.insert("card".to_string(), json!("task"));
+    metadata.insert("task_id".to_string(), json!(task.id));
+    metadata.insert("title".to_string(), json!(task.title));
+    metadata.insert("status".to_string(), json!(task.status));
+    if let Some(number) = task.task_number {
+        metadata.insert("task_number".to_string(), json!(number));
+    }
+    if !task.kind.trim().is_empty() {
+        metadata.insert("kind".to_string(), json!(task.kind));
+    }
+    Value::Object(metadata)
 }
 
 #[cfg(test)]

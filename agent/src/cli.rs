@@ -7,6 +7,8 @@ use tokio::sync::mpsc;
 pub enum StreamEvent {
     /// Agent is invoking a tool (Read, Grep, Bash, etc.)
     ToolUse { tool: String, input_summary: String },
+    /// Tool execution completed with output text.
+    ToolResult { tool: String, output: String },
     /// Agent produced text output
     AssistantText(String),
     /// Error during streaming
@@ -83,6 +85,56 @@ pub fn summarize_tool_input(tool: &str, input: &serde_json::Value) -> String {
     }
 }
 
+pub const TOOL_OUTPUT_MAX_CHARS: usize = 3000;
+
+pub fn truncate_for_log(text: &str, max_chars: usize) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    for (idx, ch) in text.chars().enumerate() {
+        if idx >= max_chars {
+            out.push('…');
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Flatten CLI tool result blocks into displayable plain text.
+pub fn summarize_tool_output(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(s) => s.trim().to_string(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .map(summarize_tool_output)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        serde_json::Value::Object(map) => {
+            if let Some(text) = map.get("text").and_then(|v| v.as_str()) {
+                return text.trim().to_string();
+            }
+            if let Some(content) = map.get("content") {
+                let nested = summarize_tool_output(content);
+                if !nested.is_empty() {
+                    return nested;
+                }
+            }
+            if let Some(output) = map.get("output") {
+                let nested = summarize_tool_output(output);
+                if !nested.is_empty() {
+                    return nested;
+                }
+            }
+            serde_json::to_string(map).unwrap_or_default()
+        }
+        other => other.to_string(),
+    }
+}
+
 /// Show last 3 path components to keep logs readable.
 fn shorten_path(path: &str) -> String {
     let parts: Vec<&str> = path.rsplit('/').take(3).collect();
@@ -91,6 +143,28 @@ fn shorten_path(path: &str) -> String {
     }
     let shortened: Vec<&str> = parts.into_iter().rev().collect();
     format!("…/{}", shortened.join("/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{summarize_tool_output, truncate_for_log, TOOL_OUTPUT_MAX_CHARS};
+
+    #[test]
+    fn truncates_tool_output_to_log_cap() {
+        let long = "a".repeat(TOOL_OUTPUT_MAX_CHARS + 64);
+        let truncated = truncate_for_log(&long, TOOL_OUTPUT_MAX_CHARS);
+        assert!(truncated.ends_with('…'));
+        assert_eq!(truncated.chars().count(), TOOL_OUTPUT_MAX_CHARS + 1);
+    }
+
+    #[test]
+    fn flattens_nested_tool_output_blocks() {
+        let value = serde_json::json!([
+            {"type": "text", "text": "line one"},
+            {"type": "text", "text": "line two"}
+        ]);
+        assert_eq!(summarize_tool_output(&value), "line one\nline two");
+    }
 }
 
 /// Dispatch to the configured CLI backend.

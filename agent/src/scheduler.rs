@@ -422,6 +422,13 @@ fn spawn_run_log_consumer(db: Database, run_id: Uuid) -> crate::cli::EventSender
                     };
                     (msg, "info")
                 }
+                StreamEvent::ToolResult { tool, output } => {
+                    let output = cli::truncate_for_log(output.trim(), cli::TOOL_OUTPUT_MAX_CHARS);
+                    if output.is_empty() {
+                        continue;
+                    }
+                    (format!("{tool} output: {output}"), "info")
+                }
                 StreamEvent::AssistantText(text) => {
                     let trimmed = text.trim();
                     if trimmed.len() < 20 {

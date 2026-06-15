@@ -3,7 +3,10 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
-use crate::cli::{CliOptions, CliResult, StreamEvent};
+use crate::cli::{
+    summarize_tool_output, truncate_for_log, CliOptions, CliResult, StreamEvent,
+    TOOL_OUTPUT_MAX_CHARS,
+};
 
 /// Default system prompt prepended to every Codex invocation.
 const AGENT_PREAMBLE: &str = "\
@@ -157,7 +160,7 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
 
                     if let Some(tx) = &opts.event_tx {
                         match item_type {
-                            "command_execution" => {
+                            "command_execution" if event_type == "item.started" => {
                                 let command =
                                     item.get("command").and_then(|v| v.as_str()).unwrap_or("");
                                 let summary = if command.len() > 120 {
@@ -169,6 +172,15 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
                                     tool: "Bash".to_string(),
                                     input_summary: summary,
                                 });
+                            }
+                            "command_execution" if event_type == "item.completed" => {
+                                let output = extract_codex_item_output(item);
+                                if !output.is_empty() {
+                                    let _ = tx.send(StreamEvent::ToolResult {
+                                        tool: "Bash".to_string(),
+                                        output,
+                                    });
+                                }
                             }
                             "file_change" if event_type == "item.completed" => {
                                 if let Some(changes) =
@@ -206,6 +218,23 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
                                     tool: format!("{server}/{tool}"),
                                     input_summary: String::new(),
                                 });
+                            }
+                            "mcp_tool_call" if event_type == "item.completed" => {
+                                let output = extract_codex_item_output(item);
+                                if !output.is_empty() {
+                                    let server = item
+                                        .get("server")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("mcp");
+                                    let tool = item
+                                        .get("tool")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown");
+                                    let _ = tx.send(StreamEvent::ToolResult {
+                                        tool: format!("{server}/{tool}"),
+                                        output,
+                                    });
+                                }
                             }
                             "agent_message" if event_type == "item.completed" => {
                                 let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("");
@@ -292,4 +321,33 @@ fn shorten_path(path: &str) -> String {
     }
     let shortened: Vec<&str> = parts.into_iter().rev().collect();
     format!("…/{}", shortened.join("/"))
+}
+
+fn extract_codex_item_output(item: &serde_json::Value) -> String {
+    let candidates = [
+        "output",
+        "stdout",
+        "stderr",
+        "text",
+        "result",
+        "combined_output",
+    ];
+    let mut chunks = Vec::new();
+    for key in candidates {
+        if let Some(value) = item.get(key) {
+            let text = summarize_tool_output(value);
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                chunks.push(trimmed.to_string());
+            }
+        }
+    }
+    if chunks.is_empty() {
+        if let Some(exit_code) = item.get("exit_code").and_then(|v| v.as_i64()) {
+            if exit_code != 0 {
+                chunks.push(format!("command failed with exit code {exit_code}"));
+            }
+        }
+    }
+    truncate_for_log(&chunks.join("\n"), TOOL_OUTPUT_MAX_CHARS)
 }

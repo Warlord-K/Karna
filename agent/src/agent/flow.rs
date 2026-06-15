@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use chrono::Utc;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -110,6 +110,7 @@ async fn run_standard_generic(config: &Config, db: &Database, task: &AgentTask) 
         updates.insert("output_ref".to_string(), Value::String(output_ref));
         let _ = db.update_task(task.id, task.user_id, &updates).await?;
     }
+    persist_artifact_for_detail(db, task, &artifact).await;
     db.update_status(task.id, TaskStatus::Done.as_str()).await?;
 
     if matches!(
@@ -178,6 +179,7 @@ async fn run_orchestrator(
         "orchestrator_turn",
         &format!("Starting orchestrator turn #{turn_number}"),
         "info",
+        None,
     )
     .await;
 
@@ -199,6 +201,7 @@ async fn run_orchestrator(
                 base_branch
             ),
             "info",
+            None,
         )
         .await;
         repo_path
@@ -303,6 +306,7 @@ async fn run_orchestrator(
                 "orchestrator",
                 &format!("Invalid actions block: {error}"),
                 "warning",
+                None,
             )
             .await;
             db.set_feedback(
@@ -325,6 +329,7 @@ async fn run_orchestrator(
                 "orchestrator",
                 &format!("Action execution blocked: {error}"),
                 "warning",
+                None,
             )
             .await;
             db.set_feedback(
@@ -355,6 +360,7 @@ async fn run_orchestrator(
             "orchestrator",
             &format!("Closed on turn #{turn_number}"),
             "info",
+            None,
         )
         .await;
         return Ok(());
@@ -367,6 +373,7 @@ async fn run_orchestrator(
             "orchestrator",
             &format!("Deferred until {}", until.to_rfc3339()),
             "info",
+            None,
         )
         .await;
     } else {
@@ -376,6 +383,7 @@ async fn run_orchestrator(
             "orchestrator",
             "Waiting for next thread reply or queued follow-up turn",
             "info",
+            None,
         )
         .await;
     }
@@ -516,8 +524,12 @@ async fn insert_orchestrator_log(
     phase: &str,
     message: &str,
     log_type: &str,
+    metadata: Option<Value>,
 ) {
-    if let Err(error) = db.insert_log(task_id, phase, message, log_type, None).await {
+    if let Err(error) = db
+        .insert_log(task_id, phase, message, log_type, metadata)
+        .await
+    {
         warn!(
             task_id = %task_id,
             %error,
@@ -539,20 +551,17 @@ async fn write_output_target(
     let mut output_ref = output_ref_from_output;
     match output_target {
         TaskOutputTarget::Notification | TaskOutputTarget::None => {
-            db.insert_log(task.id, "artifact", artifact, "output", None)
-                .await?;
+            insert_artifact_log(db, task.id, output_target, output_ref.as_deref(), artifact).await;
         }
         TaskOutputTarget::SlackMessage => {
-            db.insert_log(task.id, "artifact", artifact, "output", None)
-                .await?;
             let slack_ref = crate::slack::send_task_message(config, db, task, artifact).await?;
             if output_ref.is_none() {
                 output_ref = slack_ref;
             }
+            insert_artifact_log(db, task.id, output_target, output_ref.as_deref(), artifact).await;
         }
         TaskOutputTarget::LinearComment | TaskOutputTarget::LinearDoc => {
-            db.insert_log(task.id, "artifact", artifact, "output", None)
-                .await?;
+            insert_artifact_log(db, task.id, output_target, output_ref.as_deref(), artifact).await;
             if output_ref.is_none() {
                 warn!(
                     task_id = %task.id,
@@ -562,19 +571,67 @@ async fn write_output_target(
             }
         }
         TaskOutputTarget::Pr => {
-            db.insert_log(
+            insert_orchestrator_log(
+                db,
                 task.id,
                 "artifact",
                 "Output target `pr` is unsupported for non-code flow; kept artifact in task logs",
                 "warning",
                 None,
             )
-            .await?;
-            db.insert_log(task.id, "artifact", artifact, "output", None)
-                .await?;
+            .await;
+            insert_artifact_log(db, task.id, output_target, output_ref.as_deref(), artifact).await;
         }
     }
     Ok(output_ref)
+}
+
+fn artifact_card_metadata(
+    output_target: TaskOutputTarget,
+    output_ref: Option<&str>,
+) -> serde_json::Value {
+    let output_target = match output_target {
+        TaskOutputTarget::None => None,
+        other => Some(other.as_str()),
+    };
+    json!({
+        "card": "artifact",
+        "output_target": output_target,
+        "output_ref": output_ref,
+    })
+}
+
+async fn insert_artifact_log(
+    db: &Database,
+    task_id: Uuid,
+    output_target: TaskOutputTarget,
+    output_ref: Option<&str>,
+    artifact: &str,
+) {
+    let metadata = artifact_card_metadata(output_target, output_ref);
+    if let Err(error) = db
+        .insert_log(task_id, "artifact", artifact, "output", Some(metadata))
+        .await
+    {
+        warn!(
+            task_id = %task_id,
+            %error,
+            "failed to persist artifact log"
+        );
+    }
+}
+
+async fn persist_artifact_for_detail(db: &Database, task: &AgentTask, artifact: &str) {
+    if artifact.trim().is_empty() {
+        return;
+    }
+    if let Err(error) = db.set_result_content(task.id, artifact).await {
+        warn!(
+            task_id = %task.id,
+            %error,
+            "failed to persist artifact into result_content"
+        );
+    }
 }
 
 fn extract_artifact_and_ref(output: &str) -> (String, Option<String>) {

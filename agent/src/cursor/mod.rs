@@ -1,9 +1,13 @@
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
-use crate::cli::{summarize_tool_input, CliOptions, CliResult, StreamEvent};
+use crate::cli::{
+    summarize_tool_input, summarize_tool_output, truncate_for_log, CliOptions, CliResult,
+    StreamEvent, TOOL_OUTPUT_MAX_CHARS,
+};
 
 /// Default system prompt prepended to every Cursor Agent invocation.
 ///
@@ -122,6 +126,7 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
     let mut last_assistant_text = String::new();
     let mut session_id: Option<String> = None;
     let mut is_error_response = false;
+    let mut tool_use_names: HashMap<String, String> = HashMap::new();
 
     while let Some(line) = lines.next_line().await? {
         let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) else {
@@ -151,6 +156,12 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
                                         .cloned()
                                         .unwrap_or(serde_json::Value::Null);
                                     let summary = summarize_tool_input(tool, &input);
+                                    if let Some(tool_use_id) =
+                                        block.get("id").and_then(|v| v.as_str())
+                                    {
+                                        tool_use_names
+                                            .insert(tool_use_id.to_string(), tool.to_string());
+                                    }
                                     let _ = tx.send(StreamEvent::ToolUse {
                                         tool: tool.to_string(),
                                         input_summary: summary,
@@ -169,6 +180,38 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
                                 }
                             }
                             _ => {}
+                        }
+                    }
+                }
+            }
+            Some("user") => {
+                if let Some(tx) = &opts.event_tx {
+                    if let Some(content) = json.pointer("/message/content") {
+                        let blocks: Vec<&serde_json::Value> =
+                            if let Some(array) = content.as_array() {
+                                array.iter().collect()
+                            } else {
+                                vec![content]
+                            };
+                        for block in blocks {
+                            if block.get("type").and_then(|v| v.as_str()) != Some("tool_result") {
+                                continue;
+                            }
+                            let tool = block
+                                .get("tool_use_id")
+                                .and_then(|v| v.as_str())
+                                .and_then(|tool_use_id| tool_use_names.get(tool_use_id))
+                                .cloned()
+                                .unwrap_or_else(|| "unknown".to_string());
+                            let output = block
+                                .get("content")
+                                .map(summarize_tool_output)
+                                .unwrap_or_default();
+                            let output = truncate_for_log(output.trim(), TOOL_OUTPUT_MAX_CHARS);
+                            if output.is_empty() {
+                                continue;
+                            }
+                            let _ = tx.send(StreamEvent::ToolResult { tool, output });
                         }
                     }
                 }

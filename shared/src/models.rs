@@ -226,6 +226,7 @@ pub struct AgentTask {
     pub pr_url: Option<String>,
     pub pr_number: Option<i32>,
     pub plan_content: Option<String>,
+    pub result_content: Option<String>,
     pub feedback: Option<String>,
     /// Gating timestamp for deferred orchestrator turns.
     pub not_before: Option<DateTime<Utc>>,

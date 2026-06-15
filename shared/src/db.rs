@@ -345,6 +345,7 @@ impl Database {
             "pr_url",
             "pr_number",
             "plan_content",
+            "result_content",
             "feedback",
             "agent_session_id",
             "error_message",
@@ -475,6 +476,16 @@ impl Database {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        self.bust_tasks(Some(id)).await;
+        Ok(())
+    }
+
+    pub async fn set_result_content(&self, id: Uuid, content: &str) -> Result<()> {
+        sqlx::query("UPDATE agent_tasks SET result_content = $1 WHERE id = $2")
+            .bind(content)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         self.bust_tasks(Some(id)).await;
         Ok(())
     }

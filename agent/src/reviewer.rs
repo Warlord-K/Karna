@@ -29,7 +29,7 @@ use anyhow::{Context, Result};
 use karna_shared::models::PrReview;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use tokio::process::Command;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -619,18 +619,48 @@ fn first_line(s: &str) -> String {
 fn spawn_review_log_consumer(db: Database, review_id: Uuid) -> EventSender {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
     tokio::spawn(async move {
+        let mut pending_inputs: HashMap<String, VecDeque<String>> = HashMap::new();
         while let Some(event) = rx.recv().await {
-            let (message, log_type) = match event {
+            let (message, log_type, metadata) = match event {
                 StreamEvent::ToolUse {
                     tool,
                     input_summary,
                 } => {
+                    let mut metadata = json!({ "tool": tool });
+                    if !input_summary.is_empty() {
+                        if let Some(obj) = metadata.as_object_mut() {
+                            obj.insert("input".to_string(), Value::String(input_summary.clone()));
+                        }
+                        pending_inputs
+                            .entry(tool.clone())
+                            .or_default()
+                            .push_back(input_summary.clone());
+                    }
                     let msg = if input_summary.is_empty() {
-                        tool
+                        tool.clone()
                     } else {
                         format!("{tool}: {input_summary}")
                     };
-                    (msg, "tool")
+                    (msg, "tool", Some(metadata))
+                }
+                StreamEvent::ToolResult { tool, output } => {
+                    let output = cli::truncate_for_log(output.trim(), cli::TOOL_OUTPUT_MAX_CHARS);
+                    if output.is_empty() {
+                        continue;
+                    }
+                    let mut metadata = json!({
+                        "tool": tool,
+                        "output": output,
+                    });
+                    if let Some(input) = pending_inputs
+                        .get_mut(&tool)
+                        .and_then(|queue| queue.pop_front())
+                    {
+                        if let Some(obj) = metadata.as_object_mut() {
+                            obj.insert("input".to_string(), Value::String(input));
+                        }
+                    }
+                    (format!("{tool} output"), "tool", Some(metadata))
                 }
                 StreamEvent::AssistantText(text) => {
                     let trimmed = text.trim();
@@ -638,12 +668,12 @@ fn spawn_review_log_consumer(db: Database, review_id: Uuid) -> EventSender {
                         continue;
                     }
                     let truncated: String = trimmed.chars().take(300).collect();
-                    (truncated, "output")
+                    (truncated, "output", None)
                 }
-                StreamEvent::Error(e) => (format!("Error: {e}"), "error"),
+                StreamEvent::Error(e) => (format!("Error: {e}"), "error", None),
             };
             let _ = db
-                .insert_pr_review_log(review_id, "review", &message, log_type, None)
+                .insert_pr_review_log(review_id, "review", &message, log_type, metadata)
                 .await;
         }
     });

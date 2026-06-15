@@ -4,6 +4,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use regex_lite::Regex;
 use serde::Deserialize;
+use serde_json::{json, Value};
 use tracing::warn;
 use uuid::Uuid;
 
@@ -193,6 +194,7 @@ pub async fn execute_actions(
                     "orchestrator",
                     &format!("Action reply: {}", text.trim()),
                     "info",
+                    None,
                 )
                 .await;
                 let _ = crate::slack::send_task_message(config, db, task, text).await?;
@@ -204,6 +206,7 @@ pub async fn execute_actions(
                     "orchestrator",
                     &format!("Action run accepted for tool `{tool}`"),
                     "info",
+                    None,
                 )
                 .await;
 
@@ -229,6 +232,7 @@ pub async fn execute_actions(
                     "orchestrator",
                     &format!("Action defer: waiting until {}", until.to_rfc3339()),
                     "info",
+                    None,
                 )
                 .await;
                 next_turn_notes.push(
@@ -268,8 +272,9 @@ pub async fn execute_actions(
                     db,
                     task.id,
                     "orchestrator",
-                    &format!("Action subtask: created {}", subtask.id),
+                    &format!("Created subtask: {} ({})", subtask.title, subtask.id),
                     "info",
+                    Some(build_task_card_metadata(&subtask)),
                 )
                 .await;
             }
@@ -280,6 +285,7 @@ pub async fn execute_actions(
                     "orchestrator",
                     &format!("Action escalate: {}", text.trim()),
                     "warning",
+                    None,
                 )
                 .await;
                 if let Some(channel) = channel {
@@ -298,6 +304,7 @@ pub async fn execute_actions(
                     "orchestrator",
                     &format!("Action close: {close_reason}"),
                     "info",
+                    None,
                 )
                 .await;
                 db.set_not_before(task.id, None).await?;
@@ -328,7 +335,7 @@ pub async fn escalate_and_close(
     reason: &str,
 ) -> Result<()> {
     let text = format!("Orchestrator limit reached: {reason}");
-    insert_orchestrator_log(db, task.id, "orchestrator", &text, "warning").await;
+    insert_orchestrator_log(db, task.id, "orchestrator", &text, "warning", None).await;
     if let Err(error) =
         crate::slack::send_task_message(config, db, task, &format!(":warning: {text}")).await
     {
@@ -346,8 +353,12 @@ async fn insert_orchestrator_log(
     phase: &str,
     message: &str,
     log_type: &str,
+    metadata: Option<Value>,
 ) {
-    if let Err(error) = db.insert_log(task_id, phase, message, log_type, None).await {
+    if let Err(error) = db
+        .insert_log(task_id, phase, message, log_type, metadata)
+        .await
+    {
         warn!(
             task_id = %task_id,
             %error,
@@ -358,13 +369,29 @@ async fn insert_orchestrator_log(
     }
 }
 
+fn build_task_card_metadata(task: &AgentTask) -> Value {
+    let mut metadata = serde_json::Map::new();
+    metadata.insert("card".to_string(), json!("task"));
+    metadata.insert("task_id".to_string(), json!(task.id));
+    metadata.insert("title".to_string(), json!(task.title));
+    metadata.insert("status".to_string(), json!(task.status));
+    if let Some(number) = task.task_number {
+        metadata.insert("task_number".to_string(), json!(number));
+    }
+    if !task.kind.trim().is_empty() {
+        metadata.insert("kind".to_string(), json!(task.kind));
+    }
+    Value::Object(metadata)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        enforce_guardrails, is_allowed_tool_match, parse_actions_from_output, parse_duration_spec,
-        OrchestratorAction,
+        build_task_card_metadata, enforce_guardrails, is_allowed_tool_match,
+        parse_actions_from_output, parse_duration_spec, OrchestratorAction,
     };
-    use crate::models::OrchestratorConfig;
+    use crate::models::{AgentTask, OrchestratorConfig};
+    use uuid::Uuid;
 
     #[test]
     fn parses_actions_block() {
@@ -437,5 +464,74 @@ actions -->
             "node-watchman/fal_run_test",
             "victoriametrics"
         ));
+    }
+
+    #[test]
+    fn builds_task_card_metadata() {
+        let task = AgentTask {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            assignee_user_id: None,
+            title: "Child task".to_string(),
+            description: None,
+            repo: Some("owner/repo".to_string()),
+            kind: "ops".to_string(),
+            output_target: Some("none".to_string()),
+            output_ref: None,
+            source: None,
+            parent_task_id: None,
+            target_branch: None,
+            status: "todo".to_string(),
+            priority: "medium".to_string(),
+            position: 0.0,
+            branch: None,
+            pr_url: None,
+            pr_number: None,
+            plan_content: None,
+            result_content: None,
+            feedback: None,
+            not_before: None,
+            agent_session_id: None,
+            error_message: None,
+            cli: None,
+            model: None,
+            task_number: Some(7),
+            cost_usd: 0.0,
+            external_source: None,
+            external_id: None,
+            external_url: None,
+            slack_channel: None,
+            slack_thread_ts: None,
+            assigned_agent_id: None,
+            planner_agent_id: None,
+            implementer_agent_id: None,
+            reviewer_agent_id: None,
+            orchestrator: None,
+            policy_matches: None,
+            created_at: None,
+            updated_at: None,
+            started_at: None,
+            completed_at: None,
+        };
+        let metadata = build_task_card_metadata(&task);
+        let task_id = task.id.to_string();
+        assert_eq!(metadata.get("card").and_then(|v| v.as_str()), Some("task"));
+        assert_eq!(
+            metadata.get("task_id").and_then(|v| v.as_str()),
+            Some(task_id.as_str())
+        );
+        assert_eq!(
+            metadata.get("title").and_then(|v| v.as_str()),
+            Some("Child task")
+        );
+        assert_eq!(
+            metadata.get("status").and_then(|v| v.as_str()),
+            Some("todo")
+        );
+        assert_eq!(
+            metadata.get("task_number").and_then(|v| v.as_i64()),
+            Some(7)
+        );
+        assert_eq!(metadata.get("kind").and_then(|v| v.as_str()), Some("ops"));
     }
 }

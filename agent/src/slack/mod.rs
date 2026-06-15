@@ -1264,6 +1264,7 @@ mod tests {
             pr_url: None,
             pr_number: None,
             plan_content: None,
+            result_content: None,
             feedback: None,
             not_before: None,
             agent_session_id: None,
