@@ -9,6 +9,10 @@ import { useAuthDisabled } from '@/lib/auth-context';
 import { useAgents, useConfig } from '@/hooks/use-tasks';
 import { createAgent } from '@/lib/agents';
 import { Robot, Lightning, Plus, X } from '@phosphor-icons/react';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/ui/page-header';
 
 function slugify(name: string): string {
   return name
@@ -38,20 +42,19 @@ export default function AgentsIndexPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-        <div className="flex items-start justify-between gap-3 mb-6">
-          <div>
-            <h2 className="text-[18px] font-semibold text-gray-12 tracking-[-0.02em]">Agents</h2>
-            <p className="text-[13px] text-gray-8 mt-0.5">
+        <PageHeader
+          title="Agents"
+          description={
+            <>
               Named agent identities. The ones from <code className="font-mono text-gray-9">config.yaml</code> are auto-seeded; create custom personas here.
-            </p>
-          </div>
-          <button
-            onClick={() => setCreateOpen(true)}
-            className="h-8 px-3 text-[13px] font-medium text-white bg-sun-9 hover:bg-sun-10 text-gray-1 rounded-lg transition-colors flex items-center gap-1.5 flex-shrink-0"
-          >
-            <Plus size={14} weight="bold" /> New agent
-          </button>
-        </div>
+            </>
+          }
+          actions={
+            <Button variant="primary" size="md" onClick={() => setCreateOpen(true)}>
+              <Plus size={14} weight="bold" /> New agent
+            </Button>
+          }
+        />
 
         {agents.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-gray-8">
@@ -62,35 +65,29 @@ export default function AgentsIndexPage() {
             </p>
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             {agents.map((a) => (
-              <Link
-                key={a.id}
-                href={`/agents/${a.id}`}
-                className="block bg-gray-2 border border-gray-3 rounded-lg px-4 py-3 hover:bg-gray-3 transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-[24px]" aria-hidden>{a.avatar_emoji}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[14px] font-medium text-gray-12">{a.name}</span>
-                      {a.is_default && (
-                        <span className="inline-flex items-center gap-1 px-1.5 h-4 rounded text-[10px] bg-sun-9/15 border border-sun-9/30 text-sun-10">
-                          <Lightning size={10} weight="bold" /> default
-                        </span>
-                      )}
-                      {a.paused_reason && (
-                        <span className="inline-flex items-center px-1.5 h-4 rounded text-[10px] bg-amber-500/15 border border-amber-500/30 text-amber-400">
-                          paused
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-[11px] text-gray-7 font-mono mt-0.5">
-                      {a.cli} · {a.model}
+              <Card key={a.id} interactive className="px-4 py-3">
+                <Link href={`/agents/${a.id}`} className="block focus-ring rounded-xl">
+                  <div className="flex items-center gap-3">
+                    <span className="text-[22px]" aria-hidden>{a.avatar_emoji}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[14px] font-medium text-gray-12 tracking-[-0.01em]">{a.name}</span>
+                        {a.is_default && (
+                          <Badge tone="accent">
+                            <Lightning size={10} weight="bold" /> default
+                          </Badge>
+                        )}
+                        {a.paused_reason && <Badge tone="warning">paused</Badge>}
+                      </div>
+                      <div className="text-[11px] text-gray-7 font-mono mt-0.5">
+                        {a.cli} · {a.model}
+                      </div>
                     </div>
                   </div>
-                </div>
-              </Link>
+                </Link>
+              </Card>
             ))}
           </div>
         )}
@@ -166,7 +163,7 @@ function NewAgentDialog({
     }
   };
 
-  const inputClass = "w-full h-9 px-3 text-[14px] rounded-lg bg-gray-2 border border-gray-4 text-gray-11 placeholder:text-gray-7 focus:outline-none focus:border-gray-6";
+  const inputClass = "w-full h-9 px-3 text-[14px] rounded-lg bg-gray-2 border border-gray-4 text-gray-11 placeholder:text-gray-7 transition-smooth focus-ring focus-visible:border-gray-6";
   const labelClass = "block text-[12px] font-medium text-gray-8 mb-1.5 uppercase tracking-wider";
 
   return (
@@ -254,20 +251,12 @@ function NewAgentDialog({
           </div>
 
           <div className="flex justify-end gap-2 pt-2 border-t border-gray-3 pb-safe">
-            <button
-              type="button"
-              onClick={onClose}
-              className="h-9 px-4 text-[14px] text-gray-9 hover:text-gray-12 hover:bg-gray-3 rounded-lg transition-colors"
-            >
+            <Button type="button" variant="ghost" size="lg" onClick={onClose}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={!canSubmit}
-              className="h-9 px-4 text-[14px] font-medium text-white bg-sun-9 hover:bg-sun-10 text-gray-1 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
+            </Button>
+            <Button type="submit" variant="primary" size="lg" disabled={!canSubmit}>
               {saving ? 'Creating...' : 'Create agent'}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

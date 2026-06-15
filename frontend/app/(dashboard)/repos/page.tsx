@@ -6,6 +6,8 @@ import { useRepos, useAddRepo, useDeleteRepo, useTriggerOnboard } from '@/hooks/
 import { RepoCard } from '@/components/agent/repo-card';
 import { AddRepoDialog } from '@/components/agent/add-repo-dialog';
 import { Plus, GitFork } from '@phosphor-icons/react';
+import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
 
 export default function ReposListPage() {
   const router = useRouter();
@@ -42,23 +44,20 @@ export default function ReposListPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className="text-[18px] font-semibold text-gray-12 tracking-[-0.02em]">Repos</h2>
-            <p className="text-[13px] text-gray-8 mt-0.5">
-              {repos.length === 0
-                ? 'Add repositories to enable smart multi-repo planning'
-                : `${readyCount} profiled${onboardingCount > 0 ? `, ${onboardingCount} onboarding` : ''}`}
-            </p>
-          </div>
-          <button
-            onClick={() => setAddOpen(true)}
-            className="h-8 sm:w-auto px-3.5 text-[13px] font-medium text-white bg-sun-9 hover:bg-sun-10 text-gray-1 rounded-lg transition-colors flex items-center gap-1.5"
-          >
-            <Plus size={15} weight="bold" />
-            <span className="hidden sm:inline">Add Repo</span>
-          </button>
-        </div>
+        <PageHeader
+          title="Repos"
+          description={
+            repos.length === 0
+              ? 'Add repositories to enable smart multi-repo planning'
+              : `${readyCount} profiled${onboardingCount > 0 ? `, ${onboardingCount} onboarding` : ''}`
+          }
+          actions={
+            <Button variant="primary" size="md" onClick={() => setAddOpen(true)}>
+              <Plus size={15} weight="bold" />
+              <span className="hidden sm:inline">Add Repo</span>
+            </Button>
+          }
+        />
 
         {repos.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-gray-8">
@@ -67,12 +66,9 @@ export default function ReposListPage() {
             <p className="text-[13px] mt-1.5 max-w-xs text-center">
               Add your repositories so the agent can build profiles and route multi-repo tasks intelligently — no more exploring every repo for every task.
             </p>
-            <button
-              onClick={() => setAddOpen(true)}
-              className="h-9 px-4 mt-4 text-[14px] font-medium text-white bg-sun-9 hover:bg-sun-10 text-gray-1 rounded-lg transition-colors flex items-center gap-1.5"
-            >
+            <Button variant="primary" size="lg" onClick={() => setAddOpen(true)} className="mt-4">
               <Plus size={15} weight="bold" /> Add repo
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="space-y-2">

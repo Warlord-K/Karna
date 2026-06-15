@@ -80,7 +80,10 @@ export default function RepoDetailPage() {
 
   const statusColor = REPO_STATUS_COLORS[repo.status];
   const statusLabel = REPO_STATUS_LABELS[repo.status];
-  const profile = repo.profile_json || {};
+  // profile_json is an untyped JSON blob from the DB; treat it as a loose record
+  // so field reads/renders don't surface as `unknown` in JSX children.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const profile = (repo.profile_json ?? {}) as Record<string, any>;
   const showWebhookRow = repo.sync_issues || repo.review_prs;
 
   return (

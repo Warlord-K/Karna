@@ -5,6 +5,7 @@ use chrono::{DateTime, Duration, Utc};
 use regex_lite::Regex;
 use serde::Deserialize;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::config::Config;
 use crate::db::Database;
@@ -186,25 +187,25 @@ pub async fn execute_actions(
     for action in actions {
         match action {
             OrchestratorAction::Reply { text } => {
-                db.insert_log(
+                insert_orchestrator_log(
+                    db,
                     task.id,
                     "orchestrator",
                     &format!("Action reply: {}", text.trim()),
                     "info",
-                    None,
                 )
-                .await?;
+                .await;
                 let _ = crate::slack::send_task_message(config, db, task, text).await?;
             }
             OrchestratorAction::Run { tool, args } => {
-                db.insert_log(
+                insert_orchestrator_log(
+                    db,
                     task.id,
                     "orchestrator",
                     &format!("Action run accepted for tool `{tool}`"),
                     "info",
-                    None,
                 )
-                .await?;
+                .await;
 
                 // v1: the executor enforces allowlists/caps, then feeds the approved
                 // run request into the next turn so the orchestrator can call MCP
@@ -222,14 +223,14 @@ pub async fn execute_actions(
                 let duration = parse_duration_spec(in_for)?;
                 let until = Utc::now() + duration;
                 db.set_not_before(task.id, Some(until)).await?;
-                db.insert_log(
+                insert_orchestrator_log(
+                    db,
                     task.id,
                     "orchestrator",
                     &format!("Action defer: waiting until {}", until.to_rfc3339()),
                     "info",
-                    None,
                 )
-                .await?;
+                .await;
                 next_turn_notes.push(
                     note.clone().unwrap_or_else(|| {
                         format!("Deferred for {in_for}. Resume from this state.")
@@ -263,24 +264,24 @@ pub async fn execute_actions(
                         Some(parsed_kind.as_str()),
                     )
                     .await?;
-                db.insert_log(
+                insert_orchestrator_log(
+                    db,
                     task.id,
                     "orchestrator",
                     &format!("Action subtask: created {}", subtask.id),
                     "info",
-                    None,
                 )
-                .await?;
+                .await;
             }
             OrchestratorAction::Escalate { text, channel } => {
-                db.insert_log(
+                insert_orchestrator_log(
+                    db,
                     task.id,
                     "orchestrator",
                     &format!("Action escalate: {}", text.trim()),
                     "warning",
-                    None,
                 )
-                .await?;
+                .await;
                 if let Some(channel) = channel {
                     let _ = crate::slack::send_message(config, channel, None, text).await;
                 } else {
@@ -291,14 +292,14 @@ pub async fn execute_actions(
                 let close_reason = reason
                     .clone()
                     .unwrap_or_else(|| "closed by orchestrator action".to_string());
-                db.insert_log(
+                insert_orchestrator_log(
+                    db,
                     task.id,
                     "orchestrator",
                     &format!("Action close: {close_reason}"),
                     "info",
-                    None,
                 )
-                .await?;
+                .await;
                 db.set_not_before(task.id, None).await?;
                 db.update_status(task.id, TaskStatus::Done.as_str()).await?;
                 if !close_reason.trim().is_empty() {
@@ -327,8 +328,7 @@ pub async fn escalate_and_close(
     reason: &str,
 ) -> Result<()> {
     let text = format!("Orchestrator limit reached: {reason}");
-    db.insert_log(task.id, "orchestrator", &text, "warning", None)
-        .await?;
+    insert_orchestrator_log(db, task.id, "orchestrator", &text, "warning").await;
     if let Err(error) =
         crate::slack::send_task_message(config, db, task, &format!(":warning: {text}")).await
     {
@@ -338,6 +338,24 @@ pub async fn escalate_and_close(
     db.set_not_before(task.id, None).await?;
     db.update_status(task.id, TaskStatus::Done.as_str()).await?;
     Ok(())
+}
+
+async fn insert_orchestrator_log(
+    db: &Database,
+    task_id: Uuid,
+    phase: &str,
+    message: &str,
+    log_type: &str,
+) {
+    if let Err(error) = db.insert_log(task_id, phase, message, log_type, None).await {
+        warn!(
+            task_id = %task_id,
+            %error,
+            phase,
+            log_type,
+            "failed to persist orchestrator log"
+        );
+    }
 }
 
 #[cfg(test)]

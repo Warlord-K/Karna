@@ -5,6 +5,7 @@ import { AgentTaskPriority, UserSummary, userDisplayName } from '@/lib/agent-tas
 import { useUsers, useAgents } from '@/hooks/use-tasks';
 import { X, Stack, ImageSquare, Plus, Robot, User } from '@phosphor-icons/react';
 import { MarkdownEditor, MarkdownEditorRef } from './markdown-editor';
+import { Button } from '@/components/ui/button';
 
 export interface BackendConfig {
   models: string[];
@@ -94,7 +95,7 @@ export function CreateTaskDialog({ open, onClose, repos, backends, onCreateTask 
   if (!open) return null;
 
   const currentModels = backends[cli]?.models || [];
-  const selectClass = "w-full h-9 px-3 text-[14px] rounded-lg bg-gray-2 border border-gray-4 text-gray-11 focus:outline-none focus:border-gray-6 cursor-pointer";
+  const selectClass = "w-full h-9 px-3 text-[14px] rounded-lg bg-gray-2 border border-gray-4 text-gray-11 transition-smooth focus-ring focus-visible:border-gray-6 cursor-pointer";
   const labelClass = "block text-[12px] font-medium text-gray-8 mb-2 uppercase tracking-wider";
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -147,7 +148,7 @@ export function CreateTaskDialog({ open, onClose, repos, backends, onCreateTask 
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 autoFocus
-                className="w-full h-10 sm:h-9 px-3 text-[16px] sm:text-[14px] rounded-lg bg-gray-2 border border-gray-4 text-gray-12 placeholder:text-gray-7 focus:outline-none focus:border-gray-6"
+                className="w-full h-10 sm:h-9 px-3 text-[16px] sm:text-[14px] rounded-lg bg-gray-2 border border-gray-4 text-gray-12 placeholder:text-gray-7 transition-smooth focus-ring focus-visible:border-gray-6"
               />
             </div>
 
@@ -333,20 +334,12 @@ export function CreateTaskDialog({ open, onClose, repos, backends, onCreateTask 
 
           {/* Footer — pinned at bottom */}
           <div className="flex justify-end gap-2.5 px-4 sm:px-6 py-4 border-t border-gray-3 flex-shrink-0 pb-safe">
-            <button
-              type="button"
-              onClick={onClose}
-              className="h-10 sm:h-9 px-4 text-[14px] text-gray-9 hover:text-gray-12 hover:bg-gray-3 rounded-lg transition-colors"
-            >
+            <Button type="button" variant="ghost" size="lg" onClick={onClose}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading || !title.trim()}
-              className="h-10 sm:h-9 px-5 text-[14px] font-medium bg-sun-9 hover:bg-sun-10 hover:shadow-[0_0_16px_hsl(40_90%_56%/0.25)] text-gray-1 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
+            </Button>
+            <Button type="submit" variant="primary" size="lg" disabled={loading || !title.trim()}>
               {loading ? 'Creating...' : 'Create task'}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

@@ -16,6 +16,8 @@ import { ScheduleCard } from '@/components/agent/schedule-card';
 import { CreateScheduleDialog } from '@/components/agent/create-schedule-dialog';
 import { Plus, CalendarBlank } from '@phosphor-icons/react';
 import toast from 'react-hot-toast';
+import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
 
 export default function SchedulesListPage() {
   const authDisabled = useAuthDisabled();
@@ -60,19 +62,16 @@ export default function SchedulesListPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className="text-[18px] font-semibold text-gray-12 tracking-[-0.02em]">Schedules</h2>
-            <p className="text-[13px] text-gray-8 mt-0.5">Automated agent runs on a recurring or one-shot basis</p>
-          </div>
-          <button
-            onClick={() => setCreateOpen(true)}
-            className="h-8 sm:w-auto px-3.5 text-[13px] font-medium text-white bg-sun-9 hover:bg-sun-10 text-gray-1 rounded-lg transition-colors flex items-center gap-1.5"
-          >
-            <Plus size={15} weight="bold" />
-            <span className="hidden sm:inline">New Schedule</span>
-          </button>
-        </div>
+        <PageHeader
+          title="Schedules"
+          description="Automated agent runs on a recurring or one-shot basis"
+          actions={
+            <Button variant="primary" size="md" onClick={() => setCreateOpen(true)}>
+              <Plus size={15} weight="bold" />
+              <span className="hidden sm:inline">New Schedule</span>
+            </Button>
+          }
+        />
 
         {schedules.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-gray-8">
@@ -81,12 +80,9 @@ export default function SchedulesListPage() {
             <p className="text-[13px] mt-1.5 max-w-xs text-center">
               Create a schedule to run automated agent tasks on a recurring basis — bug hunting, security scans, code reviews, and more.
             </p>
-            <button
-              onClick={() => setCreateOpen(true)}
-              className="h-9 px-4 mt-4 text-[14px] font-medium text-white bg-sun-9 hover:bg-sun-10 text-gray-1 rounded-lg transition-colors flex items-center gap-1.5"
-            >
+            <Button variant="primary" size="lg" onClick={() => setCreateOpen(true)} className="mt-4">
               <Plus size={15} weight="bold" /> Create schedule
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="space-y-2">

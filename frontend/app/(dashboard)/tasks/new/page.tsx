@@ -19,6 +19,7 @@ import {
   ArrowLeft, Stack, ImageSquare, Plus, X, CaretDown, Robot, User,
 } from '@phosphor-icons/react';
 import toast from 'react-hot-toast';
+import { Button } from '@/components/ui/button';
 
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
@@ -168,7 +169,7 @@ export default function NewTaskPage() {
   };
 
   const currentModels = backends[cli]?.models || [];
-  const selectClass = "w-full h-9 px-3 text-[14px] rounded-lg bg-gray-2 border border-gray-4 text-gray-11 focus:outline-none focus:border-gray-6 cursor-pointer appearance-none";
+  const selectClass = "w-full h-9 px-3 text-[14px] rounded-lg bg-gray-2 border border-gray-4 text-gray-11 transition-smooth focus-ring focus-visible:border-gray-6 cursor-pointer appearance-none";
   const labelClass = "block text-[12px] font-medium text-gray-8 mb-2 uppercase tracking-wider";
 
   return (
@@ -195,7 +196,7 @@ export default function NewTaskPage() {
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               autoFocus
-              className="w-full h-12 px-4 text-[18px] sm:text-[16px] rounded-xl bg-gray-2 border border-gray-4 text-gray-12 placeholder:text-gray-7 focus:outline-none focus:border-gray-6 transition-colors"
+              className="w-full h-12 px-4 text-[18px] sm:text-[16px] rounded-xl bg-gray-2 border border-gray-4 text-gray-12 placeholder:text-gray-7 transition-smooth focus-ring focus-visible:border-gray-6"
             />
           </div>
 
@@ -482,20 +483,12 @@ export default function NewTaskPage() {
 
           {/* Submit footer */}
           <div className="flex items-center justify-between pt-6 border-t border-gray-3 pb-safe">
-            <button
-              type="button"
-              onClick={() => router.push('/')}
-              className="h-9 px-4 text-[14px] text-gray-9 hover:text-gray-12 hover:bg-gray-3 rounded-lg transition-colors"
-            >
+            <Button type="button" variant="ghost" size="lg" onClick={() => router.push('/')}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading || !title.trim()}
-              className="h-10 px-6 text-[14px] font-medium bg-sun-9 hover:bg-sun-10 hover:shadow-[0_0_16px_hsl(40_90%_56%/0.25)] text-gray-1 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
+            </Button>
+            <Button type="submit" variant="primary" size="lg" disabled={loading || !title.trim()} className="px-6 h-10">
               {loading ? 'Creating...' : 'Create task'}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

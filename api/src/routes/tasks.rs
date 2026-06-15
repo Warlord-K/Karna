@@ -8,7 +8,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{convert::Infallible, time::Duration};
+use std::{collections::HashSet, convert::Infallible, time::Duration};
 use tracing::warn;
 use uuid::Uuid;
 
@@ -162,16 +162,20 @@ pub async fn create_orchestrator_task(
     };
 
     let mut orchestrator_cfg = body.orchestrator.unwrap_or_default();
+    let configured_chat_tools = sanitize_allowed_tools(
+        state
+            .config
+            .mcp_servers
+            .iter()
+            .map(|server| server.name.clone())
+            .collect(),
+    );
     if source == Some("chat") {
-        if orchestrator_cfg.allowed_tools.is_empty() {
-            orchestrator_cfg.allowed_tools = state
-                .config
-                .mcp_servers
-                .iter()
-                .map(|server| server.name.clone())
-                .collect();
-        }
+        orchestrator_cfg.allowed_tools =
+            resolve_chat_allowed_tools(orchestrator_cfg.allowed_tools, configured_chat_tools);
         orchestrator_cfg.accepts_external_replies = false;
+    } else {
+        orchestrator_cfg.allowed_tools = sanitize_allowed_tools(orchestrator_cfg.allowed_tools);
     }
     let orchestrator_json =
         serde_json::to_value(orchestrator_cfg).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -390,6 +394,33 @@ fn parse_log_cursor(raw: &str) -> Result<LogCursor, CursorParseError> {
     Ok(LogCursor { created_at, id })
 }
 
+fn resolve_chat_allowed_tools(
+    requested_tools: Vec<String>,
+    configured_tools: Vec<String>,
+) -> Vec<String> {
+    let requested = sanitize_allowed_tools(requested_tools);
+    if requested.is_empty() {
+        configured_tools
+    } else {
+        requested
+    }
+}
+
+fn sanitize_allowed_tools(tools: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut sanitized = Vec::new();
+    for raw in tools {
+        let tool = raw.trim();
+        if tool.is_empty() {
+            continue;
+        }
+        if seen.insert(tool.to_string()) {
+            sanitized.push(tool.to_string());
+        }
+    }
+    sanitized
+}
+
 #[derive(Deserialize)]
 pub struct CommentBody {
     message: String,
@@ -551,7 +582,9 @@ struct SubtaskDef {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_log_cursor, CursorParseError};
+    use super::{
+        parse_log_cursor, resolve_chat_allowed_tools, sanitize_allowed_tools, CursorParseError,
+    };
     use chrono::{TimeZone, Utc};
     use uuid::Uuid;
 
@@ -585,5 +618,34 @@ mod tests {
         let err = parse_log_cursor("2026-06-14T16:30:00Z|not-a-uuid")
             .expect_err("cursor should be rejected");
         assert_eq!(err, CursorParseError::Uuid);
+    }
+
+    #[test]
+    fn sanitizes_allowed_tools() {
+        let sanitized = sanitize_allowed_tools(vec![
+            "  ".to_string(),
+            "context7".to_string(),
+            "context7".to_string(),
+            " github  ".to_string(),
+        ]);
+        assert_eq!(sanitized, vec!["context7", "github"]);
+    }
+
+    #[test]
+    fn chat_defaults_to_configured_tools_when_request_is_empty() {
+        let allowed = resolve_chat_allowed_tools(
+            vec![" ".to_string()],
+            vec!["context7".to_string(), "github".to_string()],
+        );
+        assert_eq!(allowed, vec!["context7", "github"]);
+    }
+
+    #[test]
+    fn chat_preserves_explicit_requested_tools() {
+        let allowed = resolve_chat_allowed_tools(
+            vec![" custom/server ".to_string()],
+            vec!["context7".to_string()],
+        );
+        assert_eq!(allowed, vec!["custom/server"]);
     }
 }

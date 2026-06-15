@@ -14,6 +14,10 @@ import {
   deletePolicy,
 } from '@/lib/policies';
 import { Plus, Trash, ShieldCheck, Warning } from '@phosphor-icons/react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Card } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
 
 const POLICIES_KEY = ['policies'] as const;
 
@@ -77,21 +81,16 @@ export default function PoliciesPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className="text-[18px] font-semibold text-gray-12 tracking-[-0.02em]">Policies</h2>
-            <p className="text-[13px] text-gray-8 mt-0.5">
-              Advisory guardrails surfaced on the plan review tab. Matched policies become a banner on the task.
-            </p>
-          </div>
-          <button
-            onClick={() => setShowCreate(true)}
-            className="h-8 px-3.5 text-[13px] font-medium text-white bg-sun-9 hover:bg-sun-10 text-gray-1 rounded-lg transition-colors flex items-center gap-1.5"
-          >
-            <Plus size={15} weight="bold" />
-            <span className="hidden sm:inline">New policy</span>
-          </button>
-        </div>
+        <PageHeader
+          title="Policies"
+          description="Advisory guardrails surfaced on the plan review tab. Matched policies become a banner on the task."
+          actions={
+            <Button variant="primary" size="md" onClick={() => setShowCreate(true)}>
+              <Plus size={15} weight="bold" />
+              <span className="hidden sm:inline">New policy</span>
+            </Button>
+          }
+        />
 
         {showCreate && (
           <CreatePolicyForm
@@ -134,22 +133,15 @@ function PolicyRow({ policy, onToggle, onDelete }: {
   onToggle: (enabled: boolean) => void;
   onDelete: () => void;
 }) {
-  const tone = policy.severity === 'block'
-    ? 'bg-red-500/15 border-red-500/30 text-red-400'
-    : 'bg-amber-500/15 border-amber-500/30 text-amber-400';
   return (
-    <div className="bg-gray-2 border border-gray-3 rounded-lg px-4 py-3 flex items-start gap-3">
+    <Card className="px-4 py-3 flex items-start gap-3">
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-[14px] font-medium text-gray-12 truncate">{policy.name}</span>
-          <span className={`inline-flex items-center gap-1 px-1.5 h-4 rounded text-[10px] border ${tone}`}>
+          <span className="text-[14px] font-medium text-gray-12 truncate tracking-[-0.01em]">{policy.name}</span>
+          <Badge tone={policy.severity === 'block' ? 'danger' : 'warning'}>
             <Warning size={10} weight="bold" /> {policy.severity}
-          </span>
-          {!policy.enabled && (
-            <span className="inline-flex items-center px-1.5 h-4 rounded text-[10px] border bg-gray-3 border-gray-5 text-gray-8">
-              disabled
-            </span>
-          )}
+          </Badge>
+          {!policy.enabled && <Badge tone="neutral">disabled</Badge>}
         </div>
         <div className="text-[12px] text-gray-9 mb-1">{policy.message}</div>
         <div className="flex items-center gap-2 text-[11px] text-gray-7 font-mono">
@@ -161,7 +153,7 @@ function PolicyRow({ policy, onToggle, onDelete }: {
       <div className="flex items-center gap-1 flex-shrink-0">
         <button
           onClick={() => onToggle(!policy.enabled)}
-          className={`relative w-9 h-5 rounded-full transition-colors ${
+          className={`relative w-9 h-5 rounded-full transition-smooth focus-ring ${
             policy.enabled ? 'bg-sun-9' : 'bg-gray-5'
           }`}
           title={policy.enabled ? 'Disable' : 'Enable'}
@@ -174,13 +166,13 @@ function PolicyRow({ policy, onToggle, onDelete }: {
         </button>
         <button
           onClick={onDelete}
-          className="h-7 w-7 flex items-center justify-center text-gray-8 hover:text-red-400 hover:bg-gray-3 rounded-md transition-colors"
+          className="h-7 w-7 flex items-center justify-center text-gray-8 hover:text-red-400 hover:bg-gray-3 rounded-md transition-smooth focus-ring"
           title="Delete"
         >
           <Trash size={14} weight="bold" />
         </button>
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -195,10 +187,10 @@ function CreatePolicyForm({ onSubmit, onCancel, submitting }: {
   const [message, setMessage] = useState('');
   const [severity, setSeverity] = useState<PolicySeverity>('warn');
 
-  const inputClass = "w-full h-9 px-3 text-[13px] rounded-lg bg-gray-3 border border-gray-4 text-gray-12 placeholder:text-gray-7 focus:outline-none focus:border-gray-6";
+  const inputClass = "w-full h-9 px-3 text-[13px] rounded-lg bg-gray-3 border border-gray-4 text-gray-12 placeholder:text-gray-7 transition-smooth focus-ring focus-visible:border-gray-6";
 
   return (
-    <div className="bg-gray-2 border border-gray-3 rounded-lg p-4 mb-3 space-y-3">
+    <Card className="p-4 mb-3 space-y-3 animate-fade-in-up">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <label className="block text-[11px] font-medium text-gray-8 uppercase tracking-wider mb-1.5">Name</label>
@@ -227,22 +219,19 @@ function CreatePolicyForm({ onSubmit, onCancel, submitting }: {
         <input className={inputClass} value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Schema change - verify rollback plan." />
       </div>
       <div className="flex justify-end gap-2 pt-1">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="h-8 px-3 text-[13px] text-gray-9 hover:text-gray-12 hover:bg-gray-3 rounded-lg transition-colors"
-        >
+        <Button type="button" variant="ghost" size="md" onClick={onCancel}>
           Cancel
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="primary"
+          size="md"
           disabled={submitting || !name.trim() || !pathGlob.trim() || !message.trim()}
           onClick={() => onSubmit({ name: name.trim(), repo_pattern: repoPattern.trim() || '*', path_glob: pathGlob.trim(), message: message.trim(), severity })}
-          className="h-8 px-4 text-[13px] font-medium text-white bg-sun-9 hover:bg-sun-10 text-gray-1 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           {submitting ? 'Creating...' : 'Create'}
-        </button>
+        </Button>
       </div>
-    </div>
+    </Card>
   );
 }

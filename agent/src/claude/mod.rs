@@ -44,12 +44,14 @@ pub async fn run(opts: CliOptions<'_>) -> Result<CliResult> {
 async fn write_mcp_config_temp_file(mcp_json: &str) -> Result<PathBuf> {
     let path = std::env::temp_dir().join(format!("karna-claude-mcp-{}.json", uuid::Uuid::new_v4()));
 
-    tokio::fs::write(&path, mcp_json.as_bytes()).await.with_context(|| {
-        format!(
-            "Failed to write Claude MCP config temp file: {}",
-            path.display()
-        )
-    })?;
+    tokio::fs::write(&path, mcp_json.as_bytes())
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to write Claude MCP config temp file: {}",
+                path.display()
+            )
+        })?;
 
     #[cfg(unix)]
     {

@@ -4,6 +4,7 @@ use anyhow::Result;
 use chrono::Utc;
 use serde_json::Value;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use crate::cli::{self, CliOptions};
 use crate::config::Config;
@@ -171,14 +172,14 @@ async fn run_orchestrator(
     }
 
     let turn_number = turns_taken + 1;
-    db.insert_log(
+    insert_orchestrator_log(
+        db,
         task.id,
         "orchestrator_turn",
         &format!("Starting orchestrator turn #{turn_number}"),
         "info",
-        None,
     )
-    .await?;
+    .await;
 
     let working_dir = if let Some(repo_ref) = task.repos().first() {
         let repo_config = config.find_repo(repo_ref);
@@ -188,7 +189,8 @@ async fn run_orchestrator(
         let repo_path =
             workspace::ensure_cloned(&config.repos_dir, repo_url, &config.github_token).await?;
         workspace::checkout_and_pull(&repo_path, base_branch).await?;
-        db.insert_log(
+        insert_orchestrator_log(
+            db,
             task.id,
             "orchestrator",
             &format!(
@@ -197,9 +199,8 @@ async fn run_orchestrator(
                 base_branch
             ),
             "info",
-            None,
         )
-        .await?;
+        .await;
         repo_path
     } else {
         let scratch_dir = config.workspaces_dir.join(task.id.to_string());
@@ -296,14 +297,14 @@ async fn run_orchestrator(
     let actions = match actions::parse_actions_from_output(&result.output) {
         Ok(parsed) => parsed,
         Err(error) => {
-            db.insert_log(
+            insert_orchestrator_log(
+                db,
                 task.id,
                 "orchestrator",
                 &format!("Invalid actions block: {error}"),
                 "warning",
-                None,
             )
-            .await?;
+            .await;
             db.set_feedback(
                 task.id,
                 &format!(
@@ -318,14 +319,14 @@ async fn run_orchestrator(
     let execution = match actions::execute_actions(config, db, task, orchestrator, &actions).await {
         Ok(done) => done,
         Err(error) => {
-            db.insert_log(
+            insert_orchestrator_log(
+                db,
                 task.id,
                 "orchestrator",
                 &format!("Action execution blocked: {error}"),
                 "warning",
-                None,
             )
-            .await?;
+            .await;
             db.set_feedback(
                 task.id,
                 &format!(
@@ -348,35 +349,35 @@ async fn run_orchestrator(
     }
 
     if execution.closed {
-        db.insert_log(
+        insert_orchestrator_log(
+            db,
             task.id,
             "orchestrator",
             &format!("Closed on turn #{turn_number}"),
             "info",
-            None,
         )
-        .await?;
+        .await;
         return Ok(());
     }
 
     if let Some(until) = execution.deferred_until {
-        db.insert_log(
+        insert_orchestrator_log(
+            db,
             task.id,
             "orchestrator",
             &format!("Deferred until {}", until.to_rfc3339()),
             "info",
-            None,
         )
-        .await?;
+        .await;
     } else {
-        db.insert_log(
+        insert_orchestrator_log(
+            db,
             task.id,
             "orchestrator",
             "Waiting for next thread reply or queued follow-up turn",
             "info",
-            None,
         )
-        .await?;
+        .await;
     }
 
     Ok(())
@@ -489,15 +490,42 @@ async fn inject_memory_section(
             injected = section.item_count;
         }
     }
-    db.insert_log(
-        task.id,
-        phase,
-        &format!("Injected {injected} memories into prompt"),
-        "info",
-        None,
-    )
-    .await?;
+    if let Err(error) = db
+        .insert_log(
+            task.id,
+            phase,
+            &format!("Injected {injected} memories into prompt"),
+            "info",
+            None,
+        )
+        .await
+    {
+        warn!(
+            task_id = %task.id,
+            %error,
+            phase,
+            "failed to persist memory injection log"
+        );
+    }
     Ok(())
+}
+
+async fn insert_orchestrator_log(
+    db: &Database,
+    task_id: Uuid,
+    phase: &str,
+    message: &str,
+    log_type: &str,
+) {
+    if let Err(error) = db.insert_log(task_id, phase, message, log_type, None).await {
+        warn!(
+            task_id = %task_id,
+            %error,
+            phase,
+            log_type,
+            "failed to persist orchestrator log"
+        );
+    }
 }
 
 async fn write_output_target(

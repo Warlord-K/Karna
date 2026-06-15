@@ -15,12 +15,36 @@ import {
 import { useTasks, useConfig, useUsers, useAgents } from '@/hooks/use-tasks';
 import { userDisplayName } from '@/lib/agent-tasks';
 import { AgentColumn } from '@/components/agent/agent-column';
+import { TaskCard } from '@/components/agent/task-card';
 import { Plus, ArrowsClockwise } from '@phosphor-icons/react';
-import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
+import {
+  DndContext,
+  DragEndEvent,
+  DragOverlay,
+  DragStartEvent,
+  DropAnimation,
+  PointerSensor,
+  TouchSensor,
+  KeyboardSensor,
+  closestCorners,
+  defaultDropAnimationSideEffects,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import toast from 'react-hot-toast';
 import { useQueryClient } from '@tanstack/react-query';
 import { taskKeys } from '@/hooks/use-tasks';
 import { updateTask as updateTaskApi } from '@/lib/agent-tasks';
+import { Button } from '@/components/ui/button';
+
+const dropAnimation: DropAnimation = {
+  duration: 180,
+  easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+  sideEffects: defaultDropAnimationSideEffects({
+    styles: { active: { opacity: '0.35' } },
+  }),
+};
 
 export default function BoardPage() {
   const authDisabled = useAuthDisabled();
@@ -53,7 +77,8 @@ export default function BoardPage() {
 
   const sensors = useSensors(
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
   const handleRefresh = async () => {
@@ -115,27 +140,29 @@ export default function BoardPage() {
   return (
     <div className="h-full flex flex-col">
       {/* Board action bar */}
-      <div className="flex items-center justify-end gap-1 sm:gap-1.5 px-3 sm:px-6 py-2 flex-shrink-0">
-        <button
+      <div className="flex items-center justify-end gap-1.5 px-3 sm:px-5 py-2 flex-shrink-0">
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={handleRefresh}
-          className="h-8 w-8 sm:px-2.5 text-[13px] text-gray-9 hover:text-gray-12 hover:bg-gray-3 rounded-lg transition-colors flex items-center justify-center gap-1.5"
+          aria-label="Refresh board"
+          title="Refresh"
         >
           <ArrowsClockwise size={16} weight="bold" className={refreshing ? 'animate-spin' : ''} />
-        </button>
-        <button
-          onClick={handleNewTask}
-          className="h-8 w-8 sm:w-auto sm:px-3.5 text-[13px] font-medium text-white bg-sun-9 hover:bg-sun-10 hover:shadow-[0_0_16px_hsl(40_90%_56%/0.25)] text-gray-1 rounded-lg transition-all duration-200 flex items-center justify-center gap-1.5"
-        >
+        </Button>
+        <Button variant="primary" size="md" onClick={handleNewTask}>
           <Plus size={15} weight="bold" />
           <span className="hidden sm:inline">New Task</span>
-        </button>
+        </Button>
       </div>
 
       <div className="flex-1 overflow-x-auto overflow-y-hidden snap-x sm:snap-none mobile-hide-scrollbar">
         <DndContext
           sensors={sensors}
+          collisionDetection={closestCorners}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
+          onDragCancel={() => setActiveId(null)}
         >
           <div className="flex gap-0 h-full min-w-max sm:min-w-0">
             {AGENT_COLUMNS.map((column) => (
@@ -151,11 +178,15 @@ export default function BoardPage() {
             ))}
           </div>
 
-          <DragOverlay>
+          <DragOverlay dropAnimation={dropAnimation}>
             {activeTask && (
-              <div className="bg-gray-2 rounded-lg p-4 shadow-elevated w-[280px] sm:w-[320px] border border-sun-9/20 ring-1 ring-sun-9/10">
-                <span className="text-[14px] font-medium text-gray-12">{activeTask.title}</span>
-              </div>
+              <TaskCard
+                task={activeTask}
+                onClick={() => {}}
+                creatorLabel={getCreatorLabel(activeTask)}
+                assignedAgent={getAssignedAgent(activeTask)}
+                overlay
+              />
             )}
           </DragOverlay>
         </DndContext>

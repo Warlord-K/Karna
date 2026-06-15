@@ -24,6 +24,13 @@
     --input: 30 5% 13%;
     --ring: 40 90% 56%;
     --radius: 0.625rem;
+
+    /* Motion tokens — tight, Linear/Cursor-like easing and durations */
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+    --dur-fast: 120ms;
+    --dur-base: 160ms;
+    --dur-slow: 220ms;
   }
 }
 
@@ -77,9 +84,34 @@
   .pt-safe {
     padding-top: env(safe-area-inset-top);
   }
+
+  /* Shared interaction primitives — keep micro-interactions consistent */
+  .focus-ring {
+    outline: none;
+  }
+  .focus-ring:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 3.5px hsl(40 90% 56% / 0.55);
+  }
+  .focus-ring-inset:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 1.5px hsl(40 90% 56% / 0.55);
+  }
+  .transition-smooth {
+    transition-property: color, background-color, border-color, box-shadow, transform, opacity;
+    transition-timing-function: var(--ease-out);
+    transition-duration: var(--dur-base);
+  }
+  .press-scale {
+    transition: transform var(--dur-fast) var(--ease-out);
+  }
+  .press-scale:active {
+    transform: scale(0.97);
+  }
 }
 
-/* Decorative golden background geometry */
+/* Decorative golden background — a single, very subtle bottom glow (kept faint
+   so it reads like ambient depth, not decoration). */
 .board-bg-decoration {
   pointer-events: none;
   position: fixed;
@@ -88,80 +120,17 @@
   overflow: hidden;
 }
 
-.board-bg-decoration::before,
-.board-bg-decoration::after {
+.board-bg-decoration::before {
   content: '';
   position: absolute;
-  bottom: -80px;
-  width: 500px;
-  height: 500px;
-  opacity: 0.07;
+  bottom: -240px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 900px;
+  height: 480px;
+  opacity: 0.04;
   background: radial-gradient(ellipse at center, hsl(40 90% 56%), transparent 70%);
-  filter: blur(60px);
-  animation: glow-drift 12s ease-in-out infinite;
-}
-
-.board-bg-decoration::before {
-  left: -120px;
-}
-
-.board-bg-decoration::after {
-  right: -120px;
-  animation-delay: -6s;
-}
-
-/* Geometric diamond shapes */
-.board-diamond {
-  position: absolute;
-  width: 24px;
-  height: 24px;
-  border: 1px solid hsl(40 90% 56% / 0.15);
-  transform: rotate(45deg);
-  animation: diamond-float 8s ease-in-out infinite;
-}
-
-.board-diamond--1 {
-  bottom: 60px;
-  left: 12%;
-  animation-delay: 0s;
-  opacity: 0.5;
-}
-
-.board-diamond--2 {
-  bottom: 100px;
-  right: 10%;
-  width: 16px;
-  height: 16px;
-  animation-delay: -3s;
-  opacity: 0.35;
-}
-
-.board-diamond--3 {
-  bottom: 40px;
-  right: 18%;
-  width: 10px;
-  height: 10px;
-  animation-delay: -5s;
-  opacity: 0.25;
-}
-
-.board-diamond--4 {
-  bottom: 80px;
-  left: 6%;
-  width: 14px;
-  height: 14px;
-  animation-delay: -2s;
-  opacity: 0.3;
-}
-
-@keyframes glow-drift {
-  0%, 100% { transform: translateY(0) scale(1); opacity: 0.07; }
-  50% { transform: translateY(-30px) scale(1.1); opacity: 0.12; }
-}
-
-@keyframes diamond-float {
-  0%, 100% { transform: rotate(45deg) translateY(0); opacity: var(--tw-opacity, 0.3); }
-  50% { transform: rotate(45deg) translateY(-12px); opacity: calc(var(--tw-opacity, 0.3) * 1.5); }
+  filter: blur(80px);
 }
 
 /* Card entrance animation */
@@ -177,7 +146,30 @@
 }
 
 .animate-card-enter {
-  animation: card-enter 0.3s ease-out both;
+  animation: card-enter var(--dur-slow) var(--ease-out) both;
+}
+
+/* Generic mount animations */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+.animate-fade-in {
+  animation: fade-in var(--dur-base) var(--ease-out) both;
+}
+.animate-fade-in-up {
+  animation: fade-in-up var(--dur-slow) var(--ease-out) both;
+}
+.animate-scale-in {
+  animation: scale-in var(--dur-base) var(--ease-out) both;
 }
 
 /* Tab indicator slide */
@@ -228,5 +220,17 @@
   .mobile-hide-scrollbar {
     -ms-overflow-style: none;
     scrollbar-width: none;
+  }
+}
+
+/* Respect reduced-motion: drop entrance/looping animations and snap transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }
