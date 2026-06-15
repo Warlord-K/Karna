@@ -12,6 +12,7 @@ import {
   GitFork,
   Robot,
   ShieldCheck,
+  GearSix,
   ChatCenteredText,
   MagnifyingGlass,
   List as ListIcon,
@@ -52,6 +53,7 @@ const NAV_SECTIONS: NavSection[] = [
       { href: '/repos', label: 'Repos', icon: GitFork },
       { href: '/agents', label: 'Agents', icon: Robot },
       { href: '/policies', label: 'Policies', icon: ShieldCheck },
+      { href: '/settings', label: 'Settings', icon: GearSix },
     ],
   },
 ];
@@ -63,6 +65,7 @@ const SECTION_TITLES: Record<string, string> = {
   '/repos': 'Repos',
   '/agents': 'Agents',
   '/policies': 'Policies',
+  '/settings': 'Settings',
 };
 
 function activeSectionFor(pathname: string): string {
@@ -72,6 +75,7 @@ function activeSectionFor(pathname: string): string {
   if (pathname.startsWith('/repos')) return '/repos';
   if (pathname.startsWith('/agents')) return '/agents';
   if (pathname.startsWith('/policies')) return '/policies';
+  if (pathname.startsWith('/settings')) return '/settings';
   if (pathname.startsWith('/tasks')) return '/';
   return '/';
 }

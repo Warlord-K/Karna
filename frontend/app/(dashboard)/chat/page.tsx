@@ -219,7 +219,7 @@ export default function ChatIndexPage() {
           </div>
         </div>
 
-        <div className="mx-auto w-full max-w-[720px] mt-12">
+        <div className="mx-auto w-full max-w-5xl mt-12">
           <div className="flex items-center gap-2 mb-3 px-1">
             <ChatTeardropText size={14} weight="bold" className="text-gray-8" />
             <p className="text-[11px] font-medium uppercase tracking-wider text-gray-8">Recent conversations</p>

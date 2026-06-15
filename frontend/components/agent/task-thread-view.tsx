@@ -273,12 +273,12 @@ function PhaseDivider({ phase }: { phase: string }) {
 /** Assistant / agent response — the focal content of the thread. */
 function AssistantTurn({ logs }: { logs: AgentLog[] }) {
   return (
-    <div className="flex justify-start">
-      <div className="flex w-full max-w-[720px] gap-3">
+    <div className="flex w-full justify-start">
+      <div className="flex w-full gap-3">
         <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-sun-8/50 bg-sun-9/15 text-sun-10">
           <Robot size={14} weight="bold" />
         </div>
-        <div className="min-w-0 flex-1 space-y-1.5">
+        <div className="min-w-0 flex-1 space-y-1.5 max-w-3xl">
           <p className="text-[11px] font-semibold text-sun-10/90">Karna</p>
           {logs.map((log) => {
             const time = formatMessageTime(log.created_at);
@@ -305,9 +305,9 @@ function PersonBubble({ role, logs }: { role: 'user' | 'error'; logs: AgentLog[]
   const roleLabel = isUser ? 'You' : 'Error';
 
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex w-full ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div className={`flex gap-2.5 ${
-        isUser ? 'max-w-[88%] flex-row-reverse sm:max-w-[560px]' : 'w-full max-w-[680px] flex-row'
+        isUser ? 'max-w-[88%] flex-row-reverse sm:max-w-[680px]' : 'w-full flex-row'
       }`}>
         <div className={`mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border ${
           isError
@@ -317,7 +317,7 @@ function PersonBubble({ role, logs }: { role: 'user' | 'error'; logs: AgentLog[]
           {isError ? <WarningCircle size={14} weight="fill" /> : <ChatText size={14} weight="bold" />}
         </div>
 
-        <div className={`min-w-0 flex-1 space-y-1 ${isUser ? 'items-end text-right' : 'items-start text-left'}`}>
+        <div className={`min-w-0 flex-1 space-y-1 ${isUser ? 'items-end text-right' : 'items-start text-left max-w-3xl'}`}>
           <p className={`text-[11px] font-medium ${isError ? 'text-red-300' : 'text-gray-8'}`}>
             {roleLabel}
           </p>
@@ -435,8 +435,8 @@ function TaskCard({ card }: { card: TaskCardMeta }) {
   const ref = card.task_number != null ? `#${card.task_number}` : null;
 
   return (
-    <div className="flex justify-start">
-      <div className="w-full max-w-[680px]">
+    <div className="flex w-full justify-start">
+      <div className="w-full max-w-3xl">
         <p className="mb-1 flex items-center gap-1.5 pl-1 text-[11px] text-gray-7">
           <Stack size={12} weight="bold" className="text-sun-10" />
           Spawned task
@@ -472,8 +472,8 @@ function ArtifactCard({ card, log }: { card: ArtifactCardMeta; log: AgentLog }) 
   const heading = card.output_target ? humanize(card.output_target) : 'Artifact';
 
   return (
-    <div className="flex justify-start">
-      <Card className="w-full max-w-[680px] overflow-hidden">
+    <div className="flex w-full justify-start">
+      <Card className="w-full max-w-3xl overflow-hidden">
         <div className="flex items-center gap-2 border-b border-gray-4 bg-gray-3/40 px-3.5 py-2">
           <FileText size={14} weight="bold" className="flex-shrink-0 text-sun-10" />
           <span className="text-[12px] font-medium text-gray-11">{heading}</span>

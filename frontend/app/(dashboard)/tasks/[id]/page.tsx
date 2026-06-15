@@ -275,7 +275,7 @@ export default function TaskDetailPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0 overflow-x-auto">
@@ -368,7 +368,7 @@ export default function TaskDetailPage() {
               }}
               className="text-xl font-semibold text-gray-12 bg-transparent w-full outline-none tracking-[-0.02em] rounded-lg px-3 py-2 -mx-3 hover:bg-gray-2 focus:bg-gray-2 transition-colors"
             />
-            <div className="rounded-lg px-3 py-2 -mx-3 hover:bg-gray-2 focus-within:bg-gray-2 transition-colors">
+            <div className="max-w-3xl rounded-lg px-3 py-2 -mx-3 hover:bg-gray-2 focus-within:bg-gray-2 transition-colors">
               <MarkdownEditor
                 content={task.description || ''}
                 onSave={(md) => onUpdate({ description: md })}
@@ -492,11 +492,13 @@ export default function TaskDetailPage() {
                     })}
                   </div>
                 )}
-                <MarkdownEditor
-                  content={task.plan_content}
-                  onSave={(md) => onUpdate({ plan_content: md })}
-                  placeholder="Plan content..."
-                />
+                <div className="max-w-3xl">
+                  <MarkdownEditor
+                    content={task.plan_content}
+                    onSave={(md) => onUpdate({ plan_content: md })}
+                    placeholder="Plan content..."
+                  />
+                </div>
                 {task.status === 'plan_review' && (
                   <div className="flex gap-2.5 pt-4 border-t border-gray-3 sticky bottom-0 bg-background py-4">
                     <button onClick={handleApprovePlan} disabled={loading} className="h-9 px-4 text-[14px] font-medium text-white bg-green-600 hover:bg-green-500 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2">
@@ -526,7 +528,7 @@ export default function TaskDetailPage() {
         {activeTab === 'result' && (
           <div className="space-y-4">
             {task.result_content ? (
-              <div className="rounded-xl border border-gray-4 bg-gray-2 px-4 py-4">
+              <div className="max-w-3xl rounded-xl border border-gray-4 bg-gray-2 px-4 py-4">
                 {task.output_ref && /^https?:\/\//i.test(task.output_ref) && (
                   <a
                     href={task.output_ref}

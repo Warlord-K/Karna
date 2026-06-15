@@ -143,7 +143,7 @@ export default function ScheduleDetailPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3 min-w-0">
@@ -314,7 +314,7 @@ function RunDetail({ run, logs, logsEndRef }: {
           <h3 className="text-[13px] font-medium text-gray-9 mb-3 flex items-center gap-1.5">
             <Article size={14} weight="bold" /> Summary
           </h3>
-          <div className="prose prose-invert prose-sm max-w-none text-gray-11 [&_h2]:text-gray-12 [&_h3]:text-gray-12 [&_code]:text-sun-9 [&_code]:bg-gray-3 [&_code]:px-1 [&_code]:rounded [&_pre]:bg-gray-3 [&_pre]:rounded-lg [&_a]:text-sun-9">
+          <div className="prose prose-invert prose-sm max-w-3xl text-gray-11 [&_h2]:text-gray-12 [&_h3]:text-gray-12 [&_code]:text-sun-9 [&_code]:bg-gray-3 [&_code]:px-1 [&_code]:rounded [&_pre]:bg-gray-3 [&_pre]:rounded-lg [&_a]:text-sun-9">
             <ReactMarkdown>{run.summary_markdown}</ReactMarkdown>
           </div>
         </div>

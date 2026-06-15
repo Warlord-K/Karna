@@ -43,7 +43,7 @@ export default function ReposListPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
         <PageHeader
           title="Repos"
           description={

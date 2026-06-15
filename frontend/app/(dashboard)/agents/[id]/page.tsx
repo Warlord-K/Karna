@@ -176,7 +176,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
         <button
           onClick={() => router.push('/agents')}
           className="h-8 px-2 text-[12px] text-gray-8 hover:text-gray-12 hover:bg-gray-3 rounded-md transition-colors flex items-center gap-1.5 mb-3"

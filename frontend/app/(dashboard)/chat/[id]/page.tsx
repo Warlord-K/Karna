@@ -371,9 +371,9 @@ export default function ChatConversationPage() {
           <div
             ref={messagesRef}
             onScroll={updateScrollState}
-            className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-5"
+            className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 lg:px-8 py-5"
           >
-            <div className="mx-auto w-full max-w-[760px]">
+            <div className="w-full">
               {logsLoading && logs.length === 0 ? (
                 <div className="flex items-center gap-2 text-[13px] text-gray-8">
                   <CircleNotch size={14} weight="bold" className="animate-spin" />
@@ -419,8 +419,8 @@ export default function ChatConversationPage() {
             </button>
           )}
 
-          <form onSubmit={handleComposerSubmit} className="sticky bottom-0 border-t border-gray-4 bg-gray-2/95 backdrop-blur p-3 sm:p-4">
-            <div className="mx-auto w-full max-w-[760px]">
+          <form onSubmit={handleComposerSubmit} className="sticky bottom-0 border-t border-gray-4 bg-gray-2/95 backdrop-blur p-3 sm:p-4 sm:px-6 lg:px-8">
+            <div className="w-full">
               <div className="flex items-end gap-2 rounded-xl border border-gray-4 bg-gray-1 px-2.5 py-2 transition-smooth focus-within:border-gray-6 focus-within:ring-2 focus-within:ring-sun-9/25">
                 <textarea
                   ref={composerRef}

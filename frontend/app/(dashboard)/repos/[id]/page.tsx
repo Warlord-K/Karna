@@ -88,7 +88,7 @@ export default function RepoDetailPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3 min-w-0">
@@ -256,7 +256,7 @@ export default function RepoDetailPage() {
           {repo.summary && (
             <div className="space-y-2">
               <h3 className="text-[13px] font-medium text-gray-10">Summary</h3>
-              <div className="prose prose-invert prose-sm max-w-none text-[13px] text-gray-9">
+              <div className="prose prose-invert prose-sm max-w-3xl text-[13px] text-gray-9">
                 <MarkdownContent content={repo.summary} />
               </div>
             </div>
