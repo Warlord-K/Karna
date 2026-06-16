@@ -407,8 +407,10 @@ mem0:
   telemetry: false
   api:
     image:
-      repository: mem0/mem0-api-server
-      tag: latest
+      # Upstream mem0/mem0-api-server:latest is arm64-only and won't run on our
+      # amd64 nodes. karna-mem0 is our multi-arch rebuild (see .github/workflows/mem0-image.yml).
+      repository: ghcr.io/warlord-k/karna-mem0
+      tag: "2.0.6"
       pullPolicy: IfNotPresent
     resources:
       requests:

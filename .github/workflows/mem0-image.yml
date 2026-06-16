@@ -1,0 +1,139 @@
+name: Build mem0 image
+
+# Upstream mem0/mem0-api-server:latest ships arm64-only, which won't run on our
+# amd64 EKS nodes. Build a multi-arch image from the pinned mem0 server/ source
+# and publish it to GHCR as karna-mem0. Manual/dispatch only — mem0 isn't ours,
+# so we bump MEM0_REF deliberately rather than on every push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mem0_ref:
+        description: "mem0ai/mem0 git ref to build (tag/branch/sha)"
+        required: true
+        default: "v2.0.6"
+      tag:
+        description: "Image tag to publish (e.g. 2.0.6). Also pushes :latest."
+        required: true
+        default: "2.0.6"
+
+concurrency:
+  group: mem0-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  build:
+    name: Build mem0 (${{ matrix.platform.tag }})
+    runs-on: ${{ matrix.platform.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { tag: amd64, name: linux/amd64, runner: ubuntu-latest }
+          - { tag: arm64, name: linux/arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - name: Checkout mem0 source
+        uses: actions/checkout@v4
+        with:
+          repository: mem0ai/mem0
+          ref: ${{ inputs.mem0_ref }}
+
+      - name: Resolve image name
+        id: img
+        run: |
+          OWNER_LC="${OWNER,,}"
+          echo "image=${REGISTRY}/${OWNER_LC}/karna-mem0" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: server
+          file: server/Dockerfile
+          platforms: ${{ matrix.platform.name }}
+          outputs: type=image,name=${{ steps.img.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=mem0-${{ matrix.platform.tag }}
+          cache-to: type=gha,mode=max,scope=mem0-${{ matrix.platform.tag }}
+          provenance: false
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/mem0-${{ matrix.platform.tag }}.txt"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-mem0-${{ matrix.platform.tag }}
+          path: /tmp/digests/mem0-${{ matrix.platform.tag }}.txt
+          retention-days: 1
+          if-no-files-found: error
+
+  manifest:
+    name: Manifest mem0
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Resolve tag and image
+        id: meta
+        run: |
+          OWNER_LC="${OWNER,,}"
+          echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          echo "image=${REGISTRY}/${OWNER_LC}/karna-mem0" >> "$GITHUB_OUTPUT"
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-mem0-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        run: |
+          IMAGE="${{ steps.meta.outputs.image }}"
+          TAG="${{ steps.meta.outputs.tag }}"
+          REFS=""
+          for f in /tmp/digests/*.txt; do
+            d=$(cat "$f")
+            REFS="$REFS ${IMAGE}@${d}"
+          done
+          if [ -z "$REFS" ]; then
+            echo "No digests found for ${IMAGE}" >&2
+            exit 1
+          fi
+          docker buildx imagetools create \
+            -t "${IMAGE}:${TAG}" \
+            -t "${IMAGE}:latest" \
+            $REFS
+
+      - name: Inspect manifest
+        run: |
+          docker buildx imagetools inspect "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}"
